@@ -142,6 +142,7 @@ impl Path {
                 "O_DIRECTORY is specified but the file is not a directory"
             );
         }
+
         if inode_type == InodeType::SymLink
             && creation_flags.contains(CreationFlags::O_NOFOLLOW)
             && !status_flags.contains(StatusFlags::O_PATH)
