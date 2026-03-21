@@ -142,6 +142,7 @@ impl Path {
         {
             return_errno_with_message!(Errno::ELOOP, "the file is a symlink");
         }
+
         if creation_flags.contains(CreationFlags::O_DIRECTORY) && inode_type != InodeType::Dir {
             return_errno_with_message!(
                 Errno::ENOTDIR,

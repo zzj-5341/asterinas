@@ -8,7 +8,7 @@ use super::{SyscallReturn, select::do_sys_select};
 use crate::{
     fs::file::file_table::FileDesc,
     prelude::*,
-    process::signal::{sig_mask::SigMask, with_sigmask_changed},
+    process::{posix_thread::ContextPthreadAdminApi, signal::sig_mask::SigMask},
     time::timespec_t,
 };
 
@@ -30,37 +30,32 @@ pub fn sys_pselect6(
         None
     };
 
-    let operate = || {
-        do_sys_select(
-            nfds,
-            readfds_addr,
-            writefds_addr,
-            exceptfds_addr,
-            timeout,
-            ctx,
-        )
-    };
-
     if sigmask_addr != 0 {
         let sigmask_with_size = user_space.read_val::<SigMaskWithSize>(sigmask_addr)?;
-        if !sigmask_with_size.is_valid() {
-            return_errno_with_message!(Errno::EINVAL, "sigmask size is invalid")
+        if sigmask_with_size.addr != 0 {
+            if sigmask_with_size.size != size_of::<SigMask>() {
+                return_errno_with_message!(Errno::EINVAL, "invalid sigmask size");
+            }
+
+            let sigmask = user_space.read_val::<SigMask>(sigmask_with_size.addr)?;
+            ctx.save_and_set_sig_mask(sigmask);
         }
-        with_sigmask_changed(ctx, |_: SigMask| sigmask_with_size.sigmask, operate)
-    } else {
-        operate()
     }
+
+    do_sys_select(
+        nfds,
+        readfds_addr,
+        writefds_addr,
+        exceptfds_addr,
+        timeout,
+        ctx,
+    )
 }
 
+// Reference: <https://elixir.bootlin.com/linux/v6.19.8/source/fs/select.c#L763-L772>
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod)]
 struct SigMaskWithSize {
-    sigmask: SigMask,
-    sigmasksize: usize,
-}
-
-impl SigMaskWithSize {
-    const fn is_valid(&self) -> bool {
-        self.sigmask.is_empty() || self.sigmasksize == size_of::<SigMask>()
-    }
+    addr: Vaddr,
+    size: usize,
 }

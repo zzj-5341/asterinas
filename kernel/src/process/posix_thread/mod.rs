@@ -19,7 +19,7 @@ use crate::{
     process::{
         Pid,
         namespace::nsproxy::NsProxy,
-        signal::{PauseReason, PollHandle},
+        signal::{PauseReason, PollHandle, sig_mask::SigMask},
     },
     thread::{Thread, Tid},
     time::{Timer, TimerManager, clocks::ProfClock, timer::TimerGuard},
@@ -134,13 +134,9 @@ impl PosixThread {
         &self.file_table
     }
 
-    /// Gets the reference to the signal mask of the thread.
-    ///
-    /// Note that while this function offers mutable access to the signal mask,
-    /// it is not sound for callers other than the current thread to modify the
-    /// signal mask. They may only read the signal mask.
-    pub fn sig_mask(&self) -> &AtomicSigMask {
-        &self.sig_mask
+    /// Returns the signal mask of the thread.
+    pub fn sig_mask(&self) -> SigMask {
+        self.sig_mask.load(Ordering::Relaxed)
     }
 
     pub(super) fn sig_queues(&self) -> &SigQueues {
@@ -296,19 +292,6 @@ impl PosixThread {
         self.credentials.dup().restrict()
     }
 
-    /// Gets the read-write credentials of the current thread.
-    ///
-    /// It is illegal to mutate the credentials from a thread other than the
-    /// current thread. For performance reasons, this function only checks it
-    /// using debug assertions.
-    pub fn credentials_mut(&self) -> Credentials<ReadWriteOp> {
-        debug_assert!(core::ptr::eq(
-            current_thread!().as_posix_thread().unwrap(),
-            self
-        ));
-        self.credentials.dup().restrict()
-    }
-
     /// Returns the I/O priority value of the thread.
     pub fn io_priority(&self) -> &AtomicU32 {
         &self.io_priority
@@ -333,6 +316,53 @@ impl PosixThread {
     pub fn reset_timer_slack_to_default(&self) {
         let default = self.default_timer_slack_ns.load(Ordering::Relaxed);
         self.timer_slack_ns.store(default, Ordering::Relaxed);
+    }
+}
+
+/// Provides administrative APIs for the current POSIX thread.
+pub trait ContextPthreadAdminApi {
+    /// Sets the signal mask of the current thread.
+    ///
+    /// Note that it is not possible to block SIGKILL or SIGSTOP.
+    /// Attempts to do so are silently ignored.
+    fn set_sig_mask(&self, sig_mask: SigMask);
+
+    /// Saves and sets the signal mask of the current thread.
+    ///
+    /// If there are no signals to process, the old signal mask will
+    /// be automatically restored when returning from the system call.
+    /// Otherwise, it will be restored after the signal handler.
+    ///
+    /// This method should only be called when handling a system call.
+    /// It should not be called more than once per system call.
+    fn save_and_set_sig_mask(&self, sig_mask: SigMask);
+
+    /// Gets the read-write credentials of the current thread.
+    fn credentials_mut(&self) -> Credentials<ReadWriteOp>;
+}
+
+impl ContextPthreadAdminApi for Context<'_> {
+    fn set_sig_mask(&self, mut sig_mask: SigMask) {
+        use crate::process::signal::constants::{SIGKILL, SIGSTOP};
+
+        sig_mask -= SIGKILL;
+        sig_mask -= SIGSTOP;
+
+        self.posix_thread
+            .sig_mask
+            .store(sig_mask, Ordering::Relaxed);
+    }
+
+    fn save_and_set_sig_mask(&self, sig_mask: SigMask) {
+        let sig_mask_saved = self.thread_local.sig_mask_saved();
+        debug_assert!(sig_mask_saved.get().is_none());
+        sig_mask_saved.set(Some(self.posix_thread.sig_mask()));
+
+        self.set_sig_mask(sig_mask);
+    }
+
+    fn credentials_mut(&self) -> Credentials<ReadWriteOp> {
+        self.posix_thread.credentials.dup().restrict()
     }
 }
 
