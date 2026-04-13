@@ -9,7 +9,10 @@ use bitflags::bitflags;
 use crate::{
     prelude::*,
     process::{credentials::capabilities::CapSet, posix_thread::PosixThread},
-    security::{self, PtraceAccessContext, PtraceAccessCreds, PtraceAccessKind, PtraceAccessMode},
+    security::{
+        self, CapabilityReason, PtraceAccessContext, PtraceAccessCreds, PtraceAccessKind,
+        PtraceAccessMode,
+    },
 };
 
 impl PosixThread {
@@ -27,47 +30,23 @@ impl PosixThread {
             return Ok(());
         }
 
-        let cred = accessor.credentials();
-        let (caller_uid, caller_gid) = if mode.1 == CredsSource::FsCreds {
-            (cred.fsuid(), cred.fsgid())
-        } else {
-            (cred.ruid(), cred.rgid())
-        };
-
-        let self_cred = self.credentials();
-        let caller_is_same = caller_uid == self_cred.euid()
-            && caller_uid == self_cred.suid()
-            && caller_uid == self_cred.ruid()
-            && caller_gid == self_cred.egid()
-            && caller_gid == self_cred.sgid()
-            && caller_gid == self_cred.rgid();
         let caller_has_cap = self
             .process()
             .user_ns()
             .lock()
-            .check_cap(CapSet::SYS_PTRACE, accessor)
+            .check_cap_with_reason(CapSet::SYS_PTRACE, accessor, CapabilityReason::Ptrace)
             .is_ok();
-
-        if !caller_is_same && !caller_has_cap {
-            return_errno_with_message!(
-                Errno::EPERM,
-                "the calling process does not have the required permissions"
-            );
-        }
 
         security::ptrace_access_check(&PtraceAccessContext::new(
             accessor,
             self,
-            mode.into(),
+            mode.to_ptrace_access_mode(),
             caller_has_cap,
-        ))?;
-
-        Ok(())
+        ))
     }
 }
 
 /// The mode used by the alien access permission check.
-#[derive(Clone, Copy)]
 pub struct AlienAccessMode(AlienAccessFlags, CredsSource);
 
 impl AlienAccessMode {
@@ -91,25 +70,23 @@ bitflags! {
 }
 
 /// The credentials used in the alien access permission check.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CredsSource {
     FsCreds,
     RealCreds,
 }
 
-impl From<AlienAccessMode> for PtraceAccessMode {
-    fn from(mode: AlienAccessMode) -> Self {
-        let kind = if mode.0.contains(AlienAccessFlags::ATTACH) {
+impl AlienAccessMode {
+    fn to_ptrace_access_mode(self) -> PtraceAccessMode {
+        let kind = if self.0.contains(AlienAccessFlags::ATTACH) {
             PtraceAccessKind::Attach
         } else {
             PtraceAccessKind::Read
         };
-        let creds = if mode.1 == CredsSource::FsCreds {
-            PtraceAccessCreds::Fs
-        } else {
-            PtraceAccessCreds::Real
+        let creds = match self.1 {
+            CredsSource::FsCreds => PtraceAccessCreds::Fs,
+            CredsSource::RealCreds => PtraceAccessCreds::Real,
         };
-
         PtraceAccessMode::new(kind, creds)
     }
 }

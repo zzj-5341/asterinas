@@ -8,17 +8,18 @@
 
 mod modules;
 
-pub(crate) use self::modules::{
-    aster::{is_aster_inode_xattr, sync_aster_inode_xattr, validate_aster_inode_xattr},
-    yama::{YamaScope, get_yama_scope, set_yama_scope},
-};
+use aster_rights::ReadWriteOp;
+
+pub(crate) use self::modules::yama::{YamaScope, get_yama_scope, set_yama_scope};
 use crate::{
     fs::{
-        file::{AccessMode, Permission, StatusFlags},
+        file::{AccessMode, InodeMode, Permission, StatusFlags},
         vfs::path::Path,
     },
     prelude::*,
-    process::posix_thread::PosixThread,
+    process::{
+        Credentials, UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +66,67 @@ impl PtraceAccessMode {
 
     pub(crate) const fn kind(self) -> PtraceAccessKind {
         self.kind
+    }
+
+    pub(crate) const fn creds(self) -> PtraceAccessCreds {
+        self.creds
+    }
+}
+
+/// Describes why a capability is being checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CapabilityReason {
+    General,
+    CredentialsSetUid,
+    CredentialsSetGid,
+    CredentialsSetPcap,
+    Namespace,
+    Ptrace,
+    ResourceLimit,
+    Reboot,
+    Signal,
+    Socket,
+    Xattr,
+    InodeDacOverride,
+}
+
+/// Carries the inputs for checking whether a thread has a capability.
+pub(crate) struct CapableContext<'a> {
+    user_namespace: &'a UserNamespace,
+    posix_thread: &'a PosixThread,
+    capability: CapSet,
+    reason: CapabilityReason,
+}
+
+impl<'a> CapableContext<'a> {
+    pub(crate) const fn new(
+        user_namespace: &'a UserNamespace,
+        posix_thread: &'a PosixThread,
+        capability: CapSet,
+        reason: CapabilityReason,
+    ) -> Self {
+        Self {
+            user_namespace,
+            posix_thread,
+            capability,
+            reason,
+        }
+    }
+
+    pub(crate) const fn user_namespace(&self) -> &'a UserNamespace {
+        self.user_namespace
+    }
+
+    pub(crate) const fn posix_thread(&self) -> &'a PosixThread {
+        self.posix_thread
+    }
+
+    pub(crate) const fn capability(&self) -> CapSet {
+        self.capability
+    }
+
+    pub(crate) const fn reason(&self) -> CapabilityReason {
+        self.reason
     }
 }
 
@@ -123,6 +185,29 @@ impl<'a> BprmCheckContext<'a> {
     }
 }
 
+/// Carries the inputs for an executable-label transition after `execve`.
+pub(crate) struct BprmCommittedCredsContext<'a> {
+    executable: &'a Path,
+    credentials: Credentials<ReadWriteOp>,
+}
+
+impl<'a> BprmCommittedCredsContext<'a> {
+    pub(crate) fn new(executable: &'a Path, credentials: Credentials<ReadWriteOp>) -> Self {
+        Self {
+            executable,
+            credentials,
+        }
+    }
+
+    pub(crate) const fn executable(&self) -> &'a Path {
+        self.executable
+    }
+
+    pub(crate) fn credentials(&self) -> &Credentials<ReadWriteOp> {
+        &self.credentials
+    }
+}
+
 /// Carries the inputs for an inode permission check.
 pub(crate) struct InodePermissionContext<'a> {
     path: &'a Path,
@@ -176,6 +261,39 @@ impl<'a> FileOpenContext<'a> {
     }
 }
 
+/// Carries the inputs for a DAC override decision on an inode.
+pub(crate) struct InodeDacOverrideContext<'a> {
+    mode: InodeMode,
+    permission: Permission,
+    posix_thread: &'a PosixThread,
+}
+
+impl<'a> InodeDacOverrideContext<'a> {
+    pub(crate) const fn new(
+        mode: InodeMode,
+        permission: Permission,
+        posix_thread: &'a PosixThread,
+    ) -> Self {
+        Self {
+            mode,
+            permission,
+            posix_thread,
+        }
+    }
+
+    pub(crate) const fn mode(&self) -> InodeMode {
+        self.mode
+    }
+
+    pub(crate) const fn permission(&self) -> Permission {
+        self.permission
+    }
+
+    pub(crate) const fn posix_thread(&self) -> &'a PosixThread {
+        self.posix_thread
+    }
+}
+
 /// Defines the hook surface supported by built-in LSM modules.
 pub(crate) trait LsmModule: Sync {
     /// Returns the short module name.
@@ -189,6 +307,12 @@ pub(crate) trait LsmModule: Sync {
     /// Initializes the module during kernel startup.
     fn init(&self) {}
 
+    /// Checks whether a thread holds a capability in a user namespace.
+    fn capable(&self, context: &CapableContext<'_>) -> Result<()> {
+        let _ = context;
+        Ok(())
+    }
+
     /// Checks ptrace-style access between unrelated tasks.
     fn ptrace_access_check(&self, context: &PtraceAccessContext<'_>) -> Result<()> {
         let _ = context;
@@ -197,6 +321,12 @@ pub(crate) trait LsmModule: Sync {
 
     /// Checks an executable image before `execve` loads it.
     fn bprm_check_security(&self, context: &BprmCheckContext<'_>) -> Result<()> {
+        let _ = context;
+        Ok(())
+    }
+
+    /// Updates security state after new executable credentials are committed.
+    fn bprm_committed_creds(&self, context: &BprmCommittedCredsContext<'_>) -> Result<()> {
         let _ = context;
         Ok(())
     }
@@ -212,6 +342,12 @@ pub(crate) trait LsmModule: Sync {
         let _ = context;
         Ok(())
     }
+
+    /// Returns which requested DAC permissions may be bypassed on an inode.
+    fn inode_dac_override(&self, context: &InodeDacOverrideContext<'_>) -> Result<Permission> {
+        let _ = context;
+        Ok(Permission::empty())
+    }
 }
 
 pub(super) fn init() {
@@ -223,6 +359,15 @@ pub(super) fn init() {
         );
         module.init();
     }
+}
+
+/// Runs capability hooks in module order.
+pub(crate) fn capable(context: &CapableContext<'_>) -> Result<()> {
+    for module in modules::active_modules() {
+        module.capable(context)?;
+    }
+
+    Ok(())
 }
 
 /// Runs ptrace-style access hooks in module order.
@@ -238,6 +383,15 @@ pub(crate) fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<(
 pub(crate) fn bprm_check_security(context: &BprmCheckContext<'_>) -> Result<()> {
     for module in modules::active_modules() {
         module.bprm_check_security(context)?;
+    }
+
+    Ok(())
+}
+
+/// Runs exec credential-commit hooks in module order.
+pub(crate) fn bprm_committed_creds(context: &BprmCommittedCredsContext<'_>) -> Result<()> {
+    for module in modules::active_modules() {
+        module.bprm_committed_creds(context)?;
     }
 
     Ok(())
@@ -259,4 +413,15 @@ pub(crate) fn file_open(context: &FileOpenContext<'_>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Runs inode DAC override hooks in module order.
+pub(crate) fn inode_dac_override(context: &InodeDacOverrideContext<'_>) -> Result<Permission> {
+    let mut overridden = Permission::empty();
+
+    for module in modules::active_modules() {
+        overridden |= module.inode_dac_override(context)?;
+    }
+
+    Ok(overridden)
 }

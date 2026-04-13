@@ -26,6 +26,7 @@ use crate::{
             signals::kernel::KernelSignal,
         },
     },
+    security::{self, BprmCommittedCredsContext},
     vm::vmar::Vmar,
 };
 
@@ -161,6 +162,10 @@ fn do_execve_no_return(
     // `/proc/[pid]/mem` or `/proc/[pid]/maps`.
     let vmar_guard = activate_vmar(ctx, new_vmar);
     apply_caps_from_exec(process, ctx.credentials_mut(), elf_file.inode())?;
+    security::bprm_committed_creds(&BprmCommittedCredsContext::new(
+        &elf_file,
+        ctx.credentials_mut(),
+    ))?;
     drop(vmar_guard);
 
     // After the program has been successfully loaded, the virtual memory of the current process

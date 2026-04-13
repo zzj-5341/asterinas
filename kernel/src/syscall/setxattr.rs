@@ -20,8 +20,8 @@ use crate::{
         },
     },
     prelude::*,
-    process::credentials::capabilities::CapSet,
-    security,
+    process::{UserNamespace, credentials::capabilities::CapSet},
+    security::{self, CapabilityReason},
     syscall::constants::MAX_FILENAME_LEN,
 };
 
@@ -118,19 +118,10 @@ fn setxattr(
     if value_len > XATTR_VALUE_MAX_LEN {
         return_errno_with_message!(Errno::E2BIG, "xattr value too long");
     }
-    let path = lookup_path_for_xattr(&file_ctx, ctx)?;
-    if security::is_aster_inode_xattr(&xattr_name) {
-        let value = read_xattr_value_from_user(value_ptr, value_len, user_space)?;
-        security::validate_aster_inode_xattr(&xattr_name, &value)?;
+    let mut value_reader = user_space.reader(value_ptr, value_len)?;
 
-        let mut value_reader = VmReader::from(value.as_slice()).to_fallible();
-        path.set_xattr(xattr_name, &mut value_reader, flags)?;
-        let xattr_name = parse_xattr_name(name_str.as_ref())?;
-        security::sync_aster_inode_xattr(path.inode(), &xattr_name, Some(&value))?;
-    } else {
-        let mut value_reader = user_space.reader(value_ptr, value_len)?;
-        path.set_xattr(xattr_name, &mut value_reader, flags)?;
-    }
+    let path = lookup_path_for_xattr(&file_ctx, ctx)?;
+    path.set_xattr(xattr_name, &mut value_reader, flags)?;
     fs::vfs::notify::on_attr_change(&path);
     Ok(())
 }
@@ -198,14 +189,7 @@ pub(super) fn parse_xattr_name(name_str: &str) -> Result<XattrName<'_>> {
 }
 
 pub(super) fn check_xattr_namespace(namespace: XattrNamespace, ctx: &Context) -> Result<()> {
-    let credentials = ctx.posix_thread.credentials();
-    let permitted_capset = credentials.permitted_capset();
-    let effective_capset = credentials.effective_capset();
-
-    if namespace == XattrNamespace::Trusted
-        && (!permitted_capset.contains(CapSet::SYS_ADMIN)
-            || !effective_capset.contains(CapSet::SYS_ADMIN))
-    {
+    if namespace == XattrNamespace::Trusted && !current_can_access_trusted_xattr(ctx) {
         return_errno_with_message!(
             Errno::EPERM,
             "try to access trusted xattr without CAP_SYS_ADMIN"
@@ -214,14 +198,12 @@ pub(super) fn check_xattr_namespace(namespace: XattrNamespace, ctx: &Context) ->
     Ok(())
 }
 
-fn read_xattr_value_from_user(
-    value_ptr: Vaddr,
-    value_len: usize,
-    user_space: &CurrentUserSpace,
-) -> Result<Vec<u8>> {
-    let mut value = vec![0u8; value_len];
-    let mut writer = VmWriter::from(value.as_mut_slice()).to_fallible();
-    user_space.read(value_ptr, &mut writer)?;
-
-    Ok(value)
+pub(super) fn current_can_access_trusted_xattr(ctx: &Context) -> bool {
+    security::capable(
+        UserNamespace::get_init_singleton().as_ref(),
+        CapSet::SYS_ADMIN,
+        ctx.posix_thread,
+        CapabilityReason::Xattr,
+    )
+    .is_ok()
 }
