@@ -4,11 +4,9 @@
 
 set -e
 
-./aster/xattr_policy
+cd "$(dirname "$0")"
 
-./capability/capabilities
-./capability/capset
-./capability/execve
+sh ./capability/run_test.sh
 
 ./namespace/mnt_ns
 ./namespace/proc_nsfs

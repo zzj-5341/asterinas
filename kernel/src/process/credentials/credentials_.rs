@@ -9,10 +9,15 @@ use super::{
 };
 use crate::{
     prelude::*,
-    process::credentials::{
-        AMBIENT_CAPSET, BOUNDING_CAPSET,
-        capabilities::{AtomicCapSet, CapSet},
+    process::{
+        UserNamespace,
+        credentials::{
+            AMBIENT_CAPSET, BOUNDING_CAPSET,
+            capabilities::{AtomicCapSet, CapSet},
+        },
+        posix_thread::AsPosixThread,
     },
+    security::{self, CapabilityReason},
 };
 
 #[derive(Debug)]
@@ -118,7 +123,7 @@ impl Credentials_ {
     }
 
     pub(super) fn set_uid(&self, uid: Uid) -> Result<()> {
-        if self.effective_capset().contains(CapSet::SETUID) {
+        if self.current_has_capability(CapSet::SETUID, CapabilityReason::CredentialsSetUid) {
             self.set_resuid_unchecked(Some(uid), Some(uid), Some(uid));
             Ok(())
         } else {
@@ -160,7 +165,7 @@ impl Credentials_ {
             return Ok(old_fsuid);
         };
 
-        if self.effective_capset().contains(CapSet::SETUID) {
+        if self.current_has_capability(CapSet::SETUID, CapabilityReason::CredentialsSetUid) {
             self.set_fsuid_unchecked(fsuid);
             return Ok(old_fsuid);
         }
@@ -220,7 +225,7 @@ impl Credentials_ {
         suid: Option<&Uid>,
         ruid_may_be_old_suid: bool,
     ) -> Result<()> {
-        if self.effective_capset().contains(CapSet::SETUID) {
+        if self.current_has_capability(CapSet::SETUID, CapabilityReason::CredentialsSetUid) {
             return Ok(());
         }
 
@@ -355,7 +360,7 @@ impl Credentials_ {
     }
 
     pub(super) fn set_gid(&self, gid: Gid) -> Result<()> {
-        if self.effective_capset().contains(CapSet::SETGID) {
+        if self.current_has_capability(CapSet::SETGID, CapabilityReason::CredentialsSetGid) {
             self.set_resgid_unchecked(Some(gid), Some(gid), Some(gid));
             Ok(())
         } else {
@@ -401,7 +406,7 @@ impl Credentials_ {
             return Ok(old_fsgid);
         }
 
-        if self.effective_capset().contains(CapSet::SETGID) {
+        if self.current_has_capability(CapSet::SETGID, CapabilityReason::CredentialsSetGid) {
             self.set_fsgid_unchecked(fsgid);
             return Ok(old_fsgid);
         }
@@ -433,7 +438,7 @@ impl Credentials_ {
         sgid: Option<&Gid>,
         rgid_may_be_old_sgid: bool,
     ) -> Result<()> {
-        if self.effective_capset().contains(CapSet::SETGID) {
+        if self.current_has_capability(CapSet::SETGID, CapabilityReason::CredentialsSetGid) {
             return Ok(());
         }
 
@@ -554,7 +559,7 @@ impl Credentials_ {
     }
 
     pub(super) fn set_securebits(&self, securebits: SecureBits) -> Result<()> {
-        if !self.effective_capset().contains(CapSet::SETPCAP) {
+        if !self.current_has_capability(CapSet::SETPCAP, CapabilityReason::CredentialsSetPcap) {
             return_errno_with_message!(
                 Errno::EPERM,
                 "only threads with CAP_SETPCAP can change secure bits"
@@ -562,6 +567,21 @@ impl Credentials_ {
         }
 
         self.securebits.try_store(securebits, Ordering::Relaxed)
+    }
+
+    fn current_has_capability(&self, capability: CapSet, reason: CapabilityReason) -> bool {
+        let current = current_thread!();
+        let Some(posix_thread) = current.as_posix_thread() else {
+            return self.effective_capset().contains(capability);
+        };
+
+        security::capable(
+            UserNamespace::get_init_singleton().as_ref(),
+            capability,
+            posix_thread,
+            reason,
+        )
+        .is_ok()
     }
 }
 
