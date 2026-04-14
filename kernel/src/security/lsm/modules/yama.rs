@@ -6,7 +6,7 @@ use super::super::{LsmKind, LsmModule, PtraceAccessContext, PtraceAccessKind};
 use crate::{
     prelude::*,
     process::{
-        credentials::capabilities::CapSet, posix_thread::AsPosixThread, Process, UserNamespace,
+        Process, UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread,
     },
     security::CapabilityReason,
 };
