@@ -9,12 +9,15 @@
 mod modules;
 
 pub(crate) use self::modules::yama::{YamaScope, get_yama_scope, set_yama_scope};
-use crate::{prelude::*, process::posix_thread::PosixThread};
+use crate::{
+    fs::file::{InodeMode, Permission},
+    prelude::*,
+    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LsmKind {
     Minor,
-    #[expect(dead_code)]
     Major,
 }
 
@@ -55,6 +58,66 @@ impl PtraceAccessMode {
 
     pub(crate) const fn kind(self) -> PtraceAccessKind {
         self.kind
+    }
+
+    pub(crate) const fn creds(self) -> PtraceAccessCreds {
+        self.creds
+    }
+}
+
+/// Describes why a capability is being checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CapabilityReason {
+    General,
+    CredentialsSetUid,
+    CredentialsSetGid,
+    CredentialsSetPcap,
+    Namespace,
+    Ptrace,
+    ResourceLimit,
+    Reboot,
+    Signal,
+    Socket,
+    Xattr,
+}
+
+/// Carries the inputs for checking whether a thread has a capability.
+pub(crate) struct CapableContext<'a> {
+    user_namespace: &'a UserNamespace,
+    posix_thread: &'a PosixThread,
+    capability: CapSet,
+    reason: CapabilityReason,
+}
+
+impl<'a> CapableContext<'a> {
+    pub(crate) const fn new(
+        user_namespace: &'a UserNamespace,
+        posix_thread: &'a PosixThread,
+        capability: CapSet,
+        reason: CapabilityReason,
+    ) -> Self {
+        Self {
+            user_namespace,
+            posix_thread,
+            capability,
+            reason,
+        }
+    }
+
+    pub(crate) const fn user_namespace(&self) -> &'a UserNamespace {
+        self.user_namespace
+    }
+
+    pub(crate) const fn posix_thread(&self) -> &'a PosixThread {
+        self.posix_thread
+    }
+
+    pub(crate) const fn capability(&self) -> CapSet {
+        self.capability
+    }
+
+    pub(crate) const fn reason(&self) -> CapabilityReason {
+        self.reason
     }
 }
 
@@ -98,6 +161,39 @@ impl<'a> PtraceAccessContext<'a> {
     }
 }
 
+/// Carries the inputs for a DAC override decision on an inode.
+pub(crate) struct InodeDacOverrideContext<'a> {
+    mode: InodeMode,
+    permission: Permission,
+    posix_thread: &'a PosixThread,
+}
+
+impl<'a> InodeDacOverrideContext<'a> {
+    pub(crate) const fn new(
+        mode: InodeMode,
+        permission: Permission,
+        posix_thread: &'a PosixThread,
+    ) -> Self {
+        Self {
+            mode,
+            permission,
+            posix_thread,
+        }
+    }
+
+    pub(crate) const fn mode(&self) -> InodeMode {
+        self.mode
+    }
+
+    pub(crate) const fn permission(&self) -> Permission {
+        self.permission
+    }
+
+    pub(crate) const fn posix_thread(&self) -> &'a PosixThread {
+        self.posix_thread
+    }
+}
+
 /// Defines the hook surface supported by built-in LSM modules.
 pub(crate) trait LsmModule: Sync {
     /// Returns the short module name.
@@ -111,10 +207,22 @@ pub(crate) trait LsmModule: Sync {
     /// Initializes the module during kernel startup.
     fn init(&self) {}
 
+    /// Checks whether a thread holds a capability in a user namespace.
+    fn capable(&self, context: &CapableContext<'_>) -> Result<()> {
+        let _ = context;
+        Ok(())
+    }
+
     /// Checks ptrace-style access between unrelated tasks.
     fn ptrace_access_check(&self, context: &PtraceAccessContext<'_>) -> Result<()> {
         let _ = context;
         Ok(())
+    }
+
+    /// Returns which requested DAC permissions may be bypassed on an inode.
+    fn inode_dac_override(&self, context: &InodeDacOverrideContext<'_>) -> Result<Permission> {
+        let _ = context;
+        Ok(Permission::empty())
     }
 }
 
@@ -129,6 +237,15 @@ pub(super) fn init() {
     }
 }
 
+/// Runs capability hooks in module order.
+pub(crate) fn capable(context: &CapableContext<'_>) -> Result<()> {
+    for module in modules::active_modules() {
+        module.capable(context)?;
+    }
+
+    Ok(())
+}
+
 /// Runs ptrace-style access hooks in module order.
 pub(crate) fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
     for module in modules::active_modules() {
@@ -136,4 +253,15 @@ pub(crate) fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<(
     }
 
     Ok(())
+}
+
+/// Runs inode DAC override hooks in module order.
+pub(crate) fn inode_dac_override(context: &InodeDacOverrideContext<'_>) -> Result<Permission> {
+    let mut overridden = Permission::empty();
+
+    for module in modules::active_modules() {
+        overridden |= module.inode_dac_override(context)?;
+    }
+
+    Ok(overridden)
 }
