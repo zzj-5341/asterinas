@@ -6,8 +6,9 @@ use super::super::{LsmKind, LsmModule, PtraceAccessContext, PtraceAccessKind};
 use crate::{
     prelude::*,
     process::{
-        credentials::capabilities::CapSet, posix_thread::AsPosixThread, Process, UserNamespace,
+        Process, UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread,
     },
+    security::CapabilityReason,
 };
 
 pub(crate) static YAMA_LSM: YamaLsm = YamaLsm;
@@ -57,9 +58,10 @@ pub(crate) fn get_yama_scope() -> YamaScope {
 
 /// Sets the Yama scope for alien access.
 pub(crate) fn set_yama_scope(new_scope: YamaScope) -> Result<()> {
-    UserNamespace::get_init_singleton().check_cap(
+    UserNamespace::get_init_singleton().check_cap_with_reason(
         CapSet::SYS_PTRACE,
         current_thread!().as_posix_thread().unwrap(),
+        CapabilityReason::Ptrace,
     )?;
 
     YAMA_SCOPE

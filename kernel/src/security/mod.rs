@@ -17,7 +17,7 @@ pub(crate) use self::lsm::{
 use crate::{
     fs::file::{InodeMode, Permission},
     prelude::*,
-    process::{credentials::capabilities::CapSet, posix_thread::PosixThread, UserNamespace},
+    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
 };
 
 pub(super) fn init() {
