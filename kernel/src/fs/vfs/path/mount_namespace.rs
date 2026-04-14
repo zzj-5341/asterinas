@@ -10,6 +10,7 @@ use crate::{
     },
     prelude::*,
     process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
+    security::CapabilityReason,
 };
 
 /// Represents a mount namespace, which encapsulates a mount tree and provides
@@ -75,7 +76,11 @@ impl MountNamespace {
         owner: Arc<UserNamespace>,
         posix_thread: &PosixThread,
     ) -> Result<Arc<MountNamespace>> {
-        owner.check_cap(CapSet::SYS_ADMIN, posix_thread)?;
+        owner.check_cap_with_reason(
+            CapSet::SYS_ADMIN,
+            posix_thread,
+            CapabilityReason::Namespace,
+        )?;
 
         let root_mount = &self.root;
         let new_mnt_ns = Arc::new_cyclic(|weak_self| {

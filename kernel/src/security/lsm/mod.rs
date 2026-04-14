@@ -8,11 +8,11 @@
 
 mod modules;
 
-pub(crate) use self::modules::yama::{get_yama_scope, set_yama_scope, YamaScope};
+pub(crate) use self::modules::yama::{YamaScope, get_yama_scope, set_yama_scope};
 use crate::{
     fs::file::{InodeMode, Permission},
     prelude::*,
-    process::{credentials::capabilities::CapSet, posix_thread::PosixThread, UserNamespace},
+    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
