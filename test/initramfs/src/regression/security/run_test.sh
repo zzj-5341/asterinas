@@ -14,3 +14,5 @@ set -e
 ./namespace/proc_nsfs
 ./namespace/setns
 ./namespace/unshare
+
+./yama/pidfd_getfd_scope
