@@ -5,7 +5,7 @@ use spin::Once;
 use crate::{
     fs::pseudofs::{NsCommonOps, NsType, StashedDentry},
     prelude::*,
-    process::{Uid, credentials::capabilities::CapSet, posix_thread::PosixThread},
+    process::{credentials::capabilities::CapSet, posix_thread::PosixThread, Uid},
     security::{self, CapabilityReason},
 };
 
@@ -24,11 +24,6 @@ impl UserNamespace {
                 stashed_dentry: StashedDentry::new(),
             })
         })
-    }
-
-    /// Checks whether the thread has the required capability in this user namespace.
-    pub fn check_cap(&self, required: CapSet, posix_thread: &PosixThread) -> Result<()> {
-        self.check_cap_with_reason(required, posix_thread, CapabilityReason::General)
     }
 
     /// Checks whether the thread has the required capability in this user namespace

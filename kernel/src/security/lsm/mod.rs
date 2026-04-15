@@ -68,7 +68,6 @@ impl PtraceAccessMode {
 /// Describes why a capability is being checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CapabilityReason {
-    General,
     CredentialsSetUid,
     CredentialsSetGid,
     CredentialsSetPcap,
