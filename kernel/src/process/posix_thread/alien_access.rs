@@ -40,7 +40,7 @@ impl PosixThread {
         security::ptrace_access_check(&PtraceAccessContext::new(
             accessor,
             self,
-            mode.to_ptrace_access_mode(),
+            mode.into_ptrace_access_mode(),
             caller_has_cap,
         ))
     }
@@ -77,7 +77,7 @@ enum CredsSource {
 }
 
 impl AlienAccessMode {
-    fn to_ptrace_access_mode(self) -> PtraceAccessMode {
+    fn into_ptrace_access_mode(self) -> PtraceAccessMode {
         let kind = if self.0.contains(AlienAccessFlags::ATTACH) {
             PtraceAccessKind::Attach
         } else {

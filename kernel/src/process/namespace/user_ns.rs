@@ -5,7 +5,7 @@ use spin::Once;
 use crate::{
     fs::pseudofs::{NsCommonOps, NsType, StashedDentry},
     prelude::*,
-    process::{credentials::capabilities::CapSet, posix_thread::PosixThread, Uid},
+    process::{Uid, credentials::capabilities::CapSet, posix_thread::PosixThread},
     security::{self, CapabilityReason},
 };
 
