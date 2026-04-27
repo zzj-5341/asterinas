@@ -12,5 +12,8 @@ echo "[capability] running capabilities"
 echo "[capability] running capset"
 ./capset
 
+echo "[capability] running setgroups"
+./setgroups
+
 echo "[capability] running execve"
 ./execve
