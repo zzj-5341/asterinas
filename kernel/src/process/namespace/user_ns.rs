@@ -26,29 +26,6 @@ impl UserNamespace {
         })
     }
 
-    /// Checks whether the thread has the required capability in this user namespace.
-    ///
-    /// This compatibility helper keeps merge builds working while some
-    /// callers are still being migrated to pass an explicit capability
-    /// reason into the LSM stack.
-    #[expect(
-        clippy::allow_attributes,
-        reason = "merge builds still need a narrow dead_code escape hatch"
-    )]
-    #[allow(dead_code)]
-    pub fn check_cap(&self, required: CapSet, posix_thread: &PosixThread) -> Result<()> {
-        let reason = match required {
-            CapSet::SETUID => CapabilityReason::CredentialsSetUid,
-            CapSet::SETGID => CapabilityReason::CredentialsSetGid,
-            CapSet::SETPCAP => CapabilityReason::CredentialsSetPcap,
-            CapSet::KILL => CapabilityReason::Signal,
-            CapSet::SYS_PTRACE => CapabilityReason::Ptrace,
-            CapSet::SYS_RESOURCE => CapabilityReason::ResourceLimit,
-            _ => CapabilityReason::Namespace,
-        };
-        self.check_cap_with_reason(required, posix_thread, reason)
-    }
-
     /// Checks whether the thread has the required capability in this user namespace
     /// for a specific kernel operation.
     pub fn check_cap_with_reason(

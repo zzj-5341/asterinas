@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use core::ptr;
+
 use super::super::{
     CapableContext, InodeDacOverrideContext, LsmKind, LsmModule, PtraceAccessContext,
     PtraceAccessCreds,
@@ -21,7 +23,16 @@ impl LsmModule for CapabilityLsm {
     }
 
     fn capable(&self, context: &CapableContext<'_>) -> Result<()> {
-        let _ = (context.user_namespace(), context.reason());
+        let current_process = context.posix_thread().process();
+        let current_user_ns = current_process.user_ns().lock();
+        if !ptr::eq(current_user_ns.as_ref(), context.user_namespace()) {
+            return_errno_with_message!(
+                Errno::EPERM,
+                "the target user namespace is outside the caller's capability scope"
+            );
+        }
+
+        let _ = context.reason();
         if context
             .posix_thread()
             .credentials()
