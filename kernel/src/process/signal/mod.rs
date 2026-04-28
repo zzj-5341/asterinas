@@ -22,7 +22,7 @@ use ostd::{
     user::UserContextApi,
 };
 pub use pause::{Pause, PauseReason, with_sigmask_changed};
-pub use pending::HandlePendingSignal;
+pub use pending::{DequeuedSignal, HandlePendingSignal};
 pub use poll::{PollAdaptor, PollHandle, Pollable, Pollee, Poller};
 use sig_action::{SigAction, SigActionFlags, SigDefaultAction};
 use sig_mask::SigMask;
@@ -35,8 +35,8 @@ use crate::{
     prelude::*,
     process::{
         TermStatus,
-        posix_thread::{ContextPthreadAdminApi, do_exit_group},
-        signal::{c_types::stack_t, signals::Signal},
+        posix_thread::{ContextPthreadAdminApi, do_exit_group, ptrace::PtraceStopResult},
+        signal::{c_types::stack_t, constants::SIGKILL},
     },
 };
 
@@ -51,6 +51,10 @@ pub fn handle_pending_signal(
     ctx: &Context,
     pre_syscall_ret: Option<usize>,
 ) {
+    // FIXME: This function may handle or suppress only one signal per trap, delaying
+    // other pending unmasked signals until the next trap. Consider a looped scan.
+    //
+    // For details, see <https://github.com/asterinas/asterinas/pull/2984/#discussion_r3137275994>.
     let syscall_restart = if let Some(pre_syscall_ret) = pre_syscall_ret
         && user_ctx.syscall_ret() == -(Errno::ERESTARTSYS as i32) as usize
     {
@@ -67,7 +71,7 @@ pub fn handle_pending_signal(
         .take()
         .map(|mask| RestoreSigMaskGuard { ctx, mask });
 
-    let (signal, sig_action) = if let Some(dequeued_signal) = dequeue_pending_signal(ctx) {
+    let (dequeued, sig_action) = if let Some(dequeued_signal) = dequeue_pending_signal(ctx) {
         dequeued_signal
     } else {
         // Fast path: There is no signal mask to restore.
@@ -85,6 +89,43 @@ pub fn handle_pending_signal(
         }
     };
 
+    let (signal, sig_action) = if dequeued.num() != SIGKILL {
+        match ctx.posix_thread.ptrace_stop(dequeued, ctx) {
+            PtraceStopResult::Continued(Some(dequeued)) => {
+                // Note that this `dequeued` object outputted by `ptrace_stop`
+                // might be different from the input `dequeued` object
+                // because of tracer manipulation.
+                // But we name both `dequeued` anyway.
+
+                let sig_num = dequeued.num();
+                if ctx.posix_thread.sig_mask().contains(sig_num) {
+                    // Requeue the injected signal to the same signal queue as the
+                    // dequeued stop signal (thread queue or process queue).
+                    //
+                    // Reference: <https://elixir.bootlin.com/linux/v6.16.5/source/kernel/signal.c#L2770>
+                    requeue_signal(ctx, dequeued);
+                    return;
+                }
+
+                (dequeued.unwrap(), get_sig_action(ctx, sig_num))
+            }
+            PtraceStopResult::Continued(None) => return,
+            PtraceStopResult::Interrupted => {
+                match dequeue_pending_signal(ctx) {
+                    Some((dequeued, action)) if dequeued.num() == SIGKILL => {
+                        (dequeued.unwrap(), action)
+                    }
+                    // SIGKILL was consumed by a sibling thread; this thread will be
+                    // terminated as part of the process-wide exit.
+                    _ => return,
+                }
+            }
+            PtraceStopResult::NotTraced(dequeued) => (dequeued.unwrap(), sig_action),
+        }
+    } else {
+        (dequeued.unwrap(), sig_action)
+    };
+
     let sig_num = signal.num();
     match sig_action {
         SigAction::Ign => {
@@ -96,6 +137,15 @@ pub fn handle_pending_signal(
             restorer_addr,
             mask,
         } => {
+            if flags.contains(SigActionFlags::SA_RESETHAND) {
+                // In Linux, SA_RESETHAND corresponds to SA_ONESHOT,
+                // which means the user handler will be executed only once and then reset to the default.
+                // Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/kernel/signal.c#L2761>.
+                let sig_dispositions = ctx.process.sig_dispositions().lock();
+                let mut sig_dispositions = sig_dispositions.lock();
+                sig_dispositions.set_default(sig_num);
+            }
+
             if let Some(pre_syscall_ret) = syscall_restart
                 && flags.contains(SigActionFlags::SA_RESTART)
             {
@@ -125,6 +175,10 @@ pub fn handle_pending_signal(
                 debug!("Failed to handle user signal: {:?}", e);
                 // If signal handling fails, the process should be terminated with SIGSEGV.
                 // Reference: <https://elixir.bootlin.com/linux/v6.13/source/kernel/signal.c#L3082>
+                //
+                // FIXME: Linux converts a signal-frame setup failure into a SIGSEGV delivery,
+                // instead of killing the process directly.
+                // This can be observed in LTP test `signal06`.
                 do_exit_group(TermStatus::Killed(SIGSEGV));
             }
         }
@@ -180,41 +234,52 @@ impl Drop for RestoreSigMaskGuard<'_> {
     }
 }
 
-fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)> {
+fn dequeue_pending_signal(ctx: &Context) -> Option<(DequeuedSignal, SigAction)> {
     let posix_thread = ctx.posix_thread;
 
     let sig_dispositions = ctx.process.sig_dispositions().lock();
-    let mut sig_dispositions = sig_dispositions.lock();
+    let sig_dispositions = sig_dispositions.lock();
 
     let sig_mask = posix_thread.sig_mask();
     let (signal, sig_num, sig_action) = loop {
         let signal = ctx.dequeue_signal(&sig_mask)?;
         let sig_num = signal.num();
         let sig_action = sig_dispositions.get(sig_num);
-        if sig_action.will_ignore(sig_num) {
+        if sig_action.will_ignore(sig_num) && !posix_thread.is_traced() {
             continue;
         }
 
         break (signal, sig_num, sig_action);
     };
 
-    if let SigAction::User { flags, .. } = &sig_action
-        && flags.contains(SigActionFlags::SA_RESETHAND)
-    {
-        // In Linux, SA_RESETHAND corresponds to SA_ONESHOT,
-        // which means the user handler will be executed only once and then reset to the default.
-        // Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/kernel/signal.c#L2761>.
-        sig_dispositions.set_default(sig_num);
-    }
-
     debug!(
         "sig_num = {:?}, sig_name = {}, sig_action = {:#x?}",
-        signal.num(),
-        signal.num().sig_name(),
+        sig_num,
+        sig_num.sig_name(),
         sig_action
     );
 
     Some((signal, sig_action))
+}
+
+/// Re-queue the ptrace-captured signal.
+///
+/// This appends to the tail of the origin queue,
+/// which (a) loses same-number RT-signal send-order FIFO and
+/// (b) allows newer lower-numbered standard signals queued
+/// during the ptrace stop to preempt this signal.
+/// This is intentionally consistent with Linux's behaviors.
+fn requeue_signal(ctx: &Context, signal: DequeuedSignal) {
+    match signal {
+        DequeuedSignal::FromProcess(signal) => ctx.process.enqueue_signal(signal),
+        DequeuedSignal::FromThread(signal) => ctx.posix_thread.enqueue_signal(signal),
+    }
+}
+
+fn get_sig_action(ctx: &Context, sig_num: SigNum) -> SigAction {
+    let sig_dispositions = ctx.process.sig_dispositions().lock();
+    let sig_dispositions = sig_dispositions.lock();
+    sig_dispositions.get(sig_num)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -437,7 +502,7 @@ fn use_alternate_signal_stack(
 /// Writes a `u64` integer to the user's stack.
 #[cfg(target_arch = "x86_64")]
 fn write_u64_to_user_stack(sp: u64, value: u64) -> Result<u64> {
-    use crate::current_userspace;
+    use crate::context::current_userspace;
 
     let sp = sp.wrapping_sub(size_of::<u64>() as u64);
     current_userspace!().write_val(sp as _, &value)?;

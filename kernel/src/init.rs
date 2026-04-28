@@ -17,7 +17,7 @@ use crate::{
 
 pub(super) fn main() {
     // Initialize the global states for all CPUs.
-    ostd::early_println!("[kernel] OSTD initialized. Preparing components.");
+    ostd::early_println!("OSTD initialized. Preparing components.");
     component::init_all(InitStage::Bootstrap, component::parse_metadata!()).unwrap();
     init();
 
@@ -83,7 +83,7 @@ fn ap_init() {
 // the latency to switching from the idle task to a useful, runnable one.
 
 fn bsp_idle_loop() {
-    ostd::info!("[kernel] Idle thread for CPU #0 started");
+    ostd::info!("Idle thread for CPU #0 started");
 
     // Spawn the first non-idle kernel thread on BSP.
     ThreadOptions::new(first_kthread)
@@ -113,7 +113,7 @@ fn bsp_idle_loop() {
 
 fn ap_idle_loop() {
     ostd::info!(
-        "[kernel] Idle thread for CPU #{} started",
+        "Idle thread for CPU #{} started",
         // No races because this function runs on a certain AP.
         CpuId::current_racy().as_usize(),
     );
@@ -129,7 +129,7 @@ fn ap_idle_loop() {
 
 // The main function of the first (non-idle) kernel thread
 fn first_kthread() {
-    println!("[kernel] Spawn the first kernel thread");
+    println!("Spawn the first kernel thread");
 
     let init_mnt_ns = MountNamespace::get_init_singleton();
     let fs_resolver = init_mnt_ns.new_path_resolver();
@@ -155,7 +155,6 @@ fn init_in_first_kthread(path_resolver: &PathResolver) {
     crate::device::init_in_first_kthread();
     crate::net::init_in_first_kthread();
     crate::fs::init_in_first_kthread(path_resolver);
-    crate::ipc::init_in_first_kthread();
     #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
     crate::vdso::init_in_first_kthread();
 }
@@ -165,7 +164,7 @@ fn print_banner() {
     println!("{}", logo_ascii_art::get_gradient_color_version());
 }
 
-pub(crate) fn on_first_process_startup(ctx: &Context) {
+pub(super) fn on_first_process_startup(ctx: &Context) {
     component::init_all(InitStage::Process, component::parse_metadata!()).unwrap();
     crate::device::init_in_first_process(ctx).unwrap();
     crate::fs::init_in_first_process(ctx);

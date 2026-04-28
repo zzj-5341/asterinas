@@ -8,7 +8,7 @@ use core::{
 use self::timer_manager::PosixTimerManager;
 use super::{
     pid_table::{self, PidTable},
-    posix_thread::AsPosixThread,
+    posix_thread::{AsPosixThread, FIRST_POSIX_TID},
     process_vm::ProcessVmarGuard,
     rlimit::ResourceLimits,
     signal::{
@@ -55,7 +55,11 @@ pub use terminal::Terminal;
 /// Process ID.
 pub type Pid = u32;
 
+/// The PID of the init process.
+pub const INIT_PROCESS_PID: Pid = FIRST_POSIX_TID;
+
 define_atomic_version_of_integer_like_type!(Pid, {
+    /// Atomic [`Pid`].
     #[derive(Debug)]
     pub struct AtomicPid(AtomicU32);
 });
@@ -676,9 +680,6 @@ impl Process {
     }
 
     /// Stops the process.
-    //
-    // FIXME: `ptrace` is another reason that can cause a process to stop.
-    // Consider extending the method signature to support `ptrace` if necessary.
     pub fn stop(&self, sig_num: SigNum) {
         if self.status.stop_status().stop(sig_num) {
             self.wake_up_parent();

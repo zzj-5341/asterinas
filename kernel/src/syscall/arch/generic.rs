@@ -91,6 +91,7 @@ macro_rules! import_generic_syscall_entries {
             preadv::{sys_preadv, sys_preadv2, sys_readv},
             prlimit64::{sys_getrlimit, sys_prlimit64, sys_setrlimit},
             pselect6::sys_pselect6,
+            ptrace::sys_ptrace,
             pwrite64::sys_pwrite64,
             pwritev::{sys_pwritev, sys_pwritev2, sys_writev},
             read::sys_read,
@@ -155,7 +156,7 @@ macro_rules! import_generic_syscall_entries {
             symlink::sys_symlinkat,
             sync::{sys_sync, sys_syncfs},
             sysinfo::sys_sysinfo,
-            tgkill::sys_tgkill,
+            tgkill::{sys_tgkill, sys_tkill},
             timer_create::{sys_timer_create, sys_timer_delete},
             timer_settime::{sys_timer_gettime, sys_timer_settime},
             timerfd_create::sys_timerfd_create,
@@ -294,6 +295,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
             SYS_TIMER_DELETE = 111           => sys_timer_delete(args[..1]);
             SYS_CLOCK_GETTIME = 113          => sys_clock_gettime(args[..2]);
             SYS_CLOCK_NANOSLEEP = 115        => sys_clock_nanosleep(args[..4]);
+            SYS_PTRACE = 117                 => sys_ptrace(args[..4]);
             SYS_SCHED_SETPARAM = 118         => sys_sched_setparam(args[..2]);
             SYS_SCHED_SETSCHEDULER = 119     => sys_sched_setscheduler(args[..3]);
             SYS_SCHED_GETSCHEDULER = 120     => sys_sched_getscheduler(args[..1]);
@@ -304,6 +306,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
             SYS_SCHED_GET_PRIORITY_MAX = 125 => sys_sched_get_priority_max(args[..1]);
             SYS_SCHED_GET_PRIORITY_MIN = 126 => sys_sched_get_priority_min(args[..1]);
             SYS_KILL = 129                   => sys_kill(args[..2]);
+            SYS_TKILL = 130                  => sys_tkill(args[..2]);
             SYS_TGKILL = 131                 => sys_tgkill(args[..3]);
             SYS_SIGALTSTACK = 132            => sys_sigaltstack(args[..2], &user_ctx);
             SYS_RT_SIGSUSPEND = 133          => sys_rt_sigsuspend(args[..2]);

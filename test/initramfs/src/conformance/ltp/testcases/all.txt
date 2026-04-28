@@ -98,7 +98,7 @@ chroot02
 # clock_adjtime02
 
 # clock_getres01
-# clock_nanosleep01
+clock_nanosleep01
 # clock_nanosleep02
 # clock_nanosleep03
 clock_nanosleep04
@@ -1196,12 +1196,12 @@ read04
 # readdir01
 # readdir21
 
-# readlink01
-# readlink03
+readlink01
+readlink03
 
 #readlinkat test cases
-# readlinkat01
-# readlinkat02
+readlinkat01
+readlinkat02
 
 readv01
 # readv02
@@ -1556,7 +1556,7 @@ signal02
 signal03
 signal04
 signal05
-signal06
+# signal06
 
 signalfd01
 signalfd02
@@ -1718,8 +1718,8 @@ timer_delete02
 # timer_settime02
 # timer_settime03
 
-# tkill01
-# tkill02
+tkill01
+tkill02
 
 truncate02
 truncate02_64

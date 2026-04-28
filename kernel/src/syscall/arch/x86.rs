@@ -93,6 +93,7 @@ use super::{
     preadv::{sys_preadv, sys_preadv2, sys_readv},
     prlimit64::{sys_getrlimit, sys_prlimit64, sys_setrlimit},
     pselect6::sys_pselect6,
+    ptrace::sys_ptrace,
     pwrite64::sys_pwrite64,
     pwritev::{sys_pwritev, sys_pwritev2, sys_writev},
     read::sys_read,
@@ -159,7 +160,7 @@ use super::{
     symlink::{sys_symlink, sys_symlinkat},
     sync::{sys_sync, sys_syncfs},
     sysinfo::sys_sysinfo,
-    tgkill::sys_tgkill,
+    tgkill::{sys_tgkill, sys_tkill},
     time::sys_time,
     timer_create::{sys_timer_create, sys_timer_delete},
     timer_settime::{sys_timer_gettime, sys_timer_settime},
@@ -270,6 +271,7 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_GETRLIMIT = 97         => sys_getrlimit(args[..2]);
     SYS_GETRUSAGE = 98         => sys_getrusage(args[..2]);
     SYS_SYSINFO = 99           => sys_sysinfo(args[..1]);
+    SYS_PTRACE = 101           => sys_ptrace(args[..4]);
     SYS_GETUID = 102           => sys_getuid(args[..0]);
     SYS_GETGID = 104           => sys_getgid(args[..0]);
     SYS_SETUID = 105           => sys_setuid(args[..1]);
@@ -334,6 +336,7 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_REMOVEXATTR = 197      => sys_removexattr(args[..2]);
     SYS_LREMOVEXATTR = 198     => sys_lremovexattr(args[..2]);
     SYS_FREMOVEXATTR = 199     => sys_fremovexattr(args[..2]);
+    SYS_TKILL = 200            => sys_tkill(args[..2]);
     SYS_TIME = 201             => sys_time(args[..1]);
     SYS_FUTEX = 202            => sys_futex(args[..6]);
     SYS_SCHED_SETAFFINITY = 203 => sys_sched_setaffinity(args[..3]);

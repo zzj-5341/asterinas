@@ -8,6 +8,7 @@ use ostd::{
     sync::RwArc,
     task::Task,
 };
+use spin::Once;
 
 use super::{PosixThread, ThreadLocal};
 use crate::{
@@ -23,7 +24,7 @@ use crate::{
     time::{TimerManager, clocks::ProfClock},
 };
 
-/// The builder to build a posix thread
+/// The builder to build a POSIX thread
 pub struct PosixThreadBuilder {
     // The essential part
     tid: Tid,
@@ -178,6 +179,9 @@ impl PosixThreadBuilder {
                     ns_proxy: Mutex::new(Some(ns_proxy.clone())),
                     timer_slack_ns: AtomicU64::new(default_timer_slack_ns),
                     default_timer_slack_ns: AtomicU64::new(default_timer_slack_ns),
+                    tracee_status: Once::new(),
+                    tracees: Once::new(),
+                    exit_code: AtomicU32::new(0),
                 }
             };
 

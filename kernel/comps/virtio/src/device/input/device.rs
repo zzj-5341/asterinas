@@ -77,23 +77,18 @@ impl InputDevice {
     /// Create a new VirtIO-Input driver.
     /// msix_vector_left should at least have one element or n elements where n is the virtqueue amount
     pub(crate) fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let mut event_queue = VirtQueue::new(QUEUE_EVENT, QUEUE_SIZE, transport.as_mut())
-            .expect("create event virtqueue failed");
-        let status_queue = VirtQueue::new(QUEUE_STATUS, QUEUE_SIZE, transport.as_mut())
-            .expect("create status virtqueue failed");
+        let mut event_queue = VirtQueue::new(QUEUE_EVENT, QUEUE_SIZE, transport.as_mut())?;
+        let status_queue = VirtQueue::new(QUEUE_STATUS, QUEUE_SIZE, transport.as_mut())?;
 
-        let event_table = EventTable::new(QUEUE_SIZE as usize);
+        let event_table = EventTable::new(QUEUE_SIZE as usize)?;
         for i in 0..event_table.num_events() {
             let event_buf = event_table.get(i);
-            let token = event_queue.add_output_bufs(&[&event_buf]);
-            match token {
-                Ok(value) => {
-                    assert_eq!(value, i as u16);
-                }
-                Err(_) => {
-                    return Err(VirtioDeviceError::QueueUnknownError);
-                }
-            }
+            let token = event_queue.add_output_bufs(&[&event_buf]).unwrap();
+            assert_eq!(token as usize, i);
+        }
+
+        if event_queue.should_notify() {
+            event_queue.notify();
         }
 
         let device = {
@@ -120,7 +115,7 @@ impl InputDevice {
 
             // Query and update device name from config.
             let name = device.query_config_id_name();
-            info!("Virtio input device name: {}", name);
+            info!("input device name: {}", name);
             device.device_name = name;
 
             // Query and set device capabilities.
@@ -151,6 +146,7 @@ impl InputDevice {
 
         let mut transport = device.transport.lock();
         let handle_input = {
+            // FIXME: This callback captures a strong `Arc`, creating a reference cycle.
             let device = device.clone();
             move |_: &TrapFrame| device.handle_irq(&registered_device)
         };
@@ -167,7 +163,7 @@ impl InputDevice {
         let mut event_queue = self.event_queue.disable_irq().lock();
 
         // one interrupt may contain several input events, so it should loop
-        while let Ok((token, _)) = event_queue.pop_used() {
+        while let Ok((token, _)) = event_queue.pop_used_with_min_bytes(EVENT_SIZE) {
             debug_assert!(token < QUEUE_SIZE);
             let ptr = self.event_table.get(token as usize);
             let res = handle_event(&ptr);
@@ -197,7 +193,7 @@ impl InputDevice {
             out
         };
 
-        String::from_utf8(out).unwrap()
+        String::from_utf8_lossy(out.as_slice()).to_string()
     }
 
     fn query_config_prop_bits(&self) -> Option<InputProp> {
@@ -258,10 +254,7 @@ impl InputDevice {
                     let key_event = InputEvent::from_key_and_status(key_code, key_status);
                     registered_device.submit_events(&[key_event]);
                 } else {
-                    debug!(
-                        "VirtIO Input: unmapped key code {}, dropped",
-                        virtio_event.code
-                    );
+                    debug!("unmapped key code {}, dropped", virtio_event.code);
                 }
             }
             // Relative movement events (EV_REL)
@@ -272,7 +265,7 @@ impl InputDevice {
                     registered_device.submit_events(&[rel_event]);
                 } else {
                     debug!(
-                        "VirtIO Input: unmapped relative event code {}, dropped",
+                        "unmapped relative event code {}, dropped",
                         virtio_event.code
                     );
                 }
@@ -281,7 +274,7 @@ impl InputDevice {
             // Other event types
             _ => {
                 debug!(
-                    "VirtIO Input: unsupported event type {}, skipping",
+                    "unsupported event type {}, skipping",
                     virtio_event.event_type
                 );
                 return true;
@@ -492,7 +485,7 @@ impl InputDevice {
         }
 
         info!(
-            "VirtIO input device capabilities set: KEY={}, REL={}",
+            "input device capabilities set: KEY={}, REL={}",
             ev_key.is_some(),
             ev_rel.is_some()
         );
@@ -520,14 +513,13 @@ impl InputDevice {
 /// each of which is large enough to contain a `VirtioInputEvent`.
 #[derive(Debug)]
 struct EventTable {
-    stream: Arc<DmaStream>,
+    stream: DmaStream,
     num_events: usize,
 }
 
 impl EventTable {
-    fn new(num_events: usize) -> Self {
+    fn new(num_events: usize) -> Result<Self, VirtioDeviceError> {
         assert!(num_events * size_of::<VirtioInputEvent>() <= PAGE_SIZE);
-
         debug_assert!(
             VirtioInputEvent::default()
                 .as_bytes()
@@ -535,14 +527,17 @@ impl EventTable {
                 .all(|b| *b == 0)
         );
 
-        let stream = Arc::new(DmaStream::alloc(1, false).unwrap());
-        Self { stream, num_events }
+        let stream = DmaStream::alloc(1, false).map_err(VirtioDeviceError::ResourceAlloc)?;
+        Ok(Self { stream, num_events })
     }
 
     fn get(&self, idx: usize) -> EventBuf<'_> {
         assert!(idx < self.num_events);
 
         let offset = idx * EVENT_SIZE;
+        self.stream
+            .sync_from_device(offset..offset + EVENT_SIZE)
+            .unwrap();
         SafePtr::new(&self.stream, offset)
     }
 

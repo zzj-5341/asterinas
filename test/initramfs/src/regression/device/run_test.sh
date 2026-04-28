@@ -9,7 +9,10 @@ set -e
 ./pty/open_pty
 ./pty/pty_blocking
 ./pty/pty_packet_mode
+
+./devtmpfs_mode
 ./evdev
 ./framebuffer
 ./full
+./hwrng
 ./random
