@@ -16,7 +16,9 @@ use crate::{
     },
     prelude::*,
     process::{
-        ContextUnshareAdminApi, Credentials, Process, pid_table,
+        ContextUnshareAdminApi, Credentials, Process,
+        credentials::FileCapabilities,
+        pid_table,
         posix_thread::{ContextPthreadAdminApi, ThreadLocal, ThreadName, sigkill_other_threads},
         process_vm::{MAX_LEN_STRING_ARG, MAX_NR_STRING_ARGS, ProcessVm},
         program_loader::{ProgramToLoad, elf::ElfLoadInfo},
@@ -26,6 +28,7 @@ use crate::{
             signals::kernel::KernelSignal,
         },
     },
+    security,
     vm::vmar::Vmar,
 };
 
@@ -160,7 +163,9 @@ fn do_execve_no_return(
     // This prevents race conditions when checking access permissions while opening
     // `/proc/[pid]/mem` or `/proc/[pid]/maps`.
     let vmar_guard = activate_vmar(ctx, new_vmar);
-    apply_caps_from_exec(process, ctx.credentials_mut(), elf_file.inode())?;
+    let credentials = ctx.credentials_mut();
+    apply_caps_from_exec(process, &credentials, elf_file.inode())?;
+    security::bprm_committed_creds(&elf_file, &credentials)?;
     drop(vmar_guard);
 
     // After the program has been successfully loaded, the virtual memory of the current process
@@ -279,11 +284,16 @@ fn set_cpu_context(
 /// The capabilities will be updated accordingly.
 fn apply_caps_from_exec(
     process: &Process,
-    credentials: Credentials<ReadWriteOp>,
+    credentials: &Credentials<ReadWriteOp>,
     elf_inode: &Arc<dyn Inode>,
 ) -> Result<()> {
-    set_uid_from_elf(process, &credentials, elf_inode)?;
-    set_gid_from_elf(process, &credentials, elf_inode)?;
+    let current_root_uid = process.user_ns().lock().owner_uid()?;
+    let file_capabilities = FileCapabilities::read_from_inode(elf_inode)?
+        .filter(|file_capabilities| file_capabilities.applies_to_root_uid(current_root_uid));
+
+    set_uid_from_elf(process, credentials, elf_inode)?;
+    set_gid_from_elf(process, credentials, elf_inode)?;
+    credentials.update_capsets_for_exec(file_capabilities)?;
     credentials.set_keep_capabilities(false)?;
 
     Ok(())

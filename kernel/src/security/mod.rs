@@ -2,6 +2,7 @@
 
 pub(crate) mod lsm;
 
+use aster_rights::ReadWriteOp;
 use cfg_if::cfg_if;
 
 cfg_if! {
@@ -15,9 +16,14 @@ pub(crate) use self::lsm::{
     CapabilityReason, PtraceAccessContext, PtraceAccessCreds, PtraceAccessKind, PtraceAccessMode,
 };
 use crate::{
-    fs::file::{InodeMode, Permission},
+    fs::{
+        file::{InodeMode, Permission},
+        vfs::path::Path,
+    },
     prelude::*,
-    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
+    process::{
+        Credentials, UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread,
+    },
 };
 
 pub(super) fn init() {
@@ -47,6 +53,14 @@ pub(crate) fn capable(
 /// Runs the LSM stack for a ptrace-style access check.
 pub(crate) fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
     lsm::ptrace_access_check(context)
+}
+
+/// Updates security state after credentials are committed for a new executable.
+pub(crate) fn bprm_committed_creds(
+    _path: &Path,
+    _credentials: &Credentials<ReadWriteOp>,
+) -> Result<()> {
+    Ok(())
 }
 
 /// Runs the LSM stack for a DAC override decision on an inode.
