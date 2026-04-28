@@ -598,7 +598,7 @@ impl Credentials_ {
     fn current_has_capability(&self, capability: CapSet, reason: CapabilityReason) -> bool {
         let current = current_thread!();
         let Some(posix_thread) = current.as_posix_thread() else {
-            return self.effective_capset().contains(capability);
+            return false;
         };
 
         security::capable(
