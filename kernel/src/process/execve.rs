@@ -19,13 +19,15 @@ use crate::{
         ContextUnshareAdminApi, Credentials, Process,
         credentials::FileCapabilities,
         pid_table,
-        posix_thread::{ContextPthreadAdminApi, ThreadLocal, ThreadName, sigkill_other_threads},
+        posix_thread::{
+            AsPosixThread, ContextPthreadAdminApi, ThreadLocal, ThreadName, sigkill_other_threads,
+        },
         process_vm::{MAX_LEN_STRING_ARG, MAX_NR_STRING_ARGS, ProcessVm},
         program_loader::{ProgramToLoad, elf::ElfLoadInfo},
         signal::{
             HandlePendingSignal, PauseReason, SigStack,
-            constants::{SIGCHLD, SIGKILL},
-            signals::kernel::KernelSignal,
+            constants::{SIGCHLD, SIGKILL, SIGTRAP},
+            signals::{kernel::KernelSignal, user::UserSignal},
         },
     },
     security,
@@ -93,6 +95,17 @@ pub fn do_execve(
     if res.is_err() {
         ctx.posix_thread
             .enqueue_signal(Box::new(KernelSignal::new(SIGKILL)));
+    } else {
+        // If the PTRACE_O_TRACEEXEC option is not in effect, all successful
+        // calls to execve(2) by the traced process will cause it to be sent
+        // a SIGTRAP signal, giving the parent a chance to gain control
+        // before the new program begins execution.
+        //
+        // Reference: <https://man7.org/linux/man-pages/man2/ptrace.2.html>
+        if ctx.posix_thread.is_traced() {
+            ctx.posix_thread
+                .enqueue_signal(Box::new(UserSignal::new_kill(SIGTRAP, ctx)));
+        }
     }
 
     ctx.process.tasks().lock().finish_execve();
@@ -242,8 +255,12 @@ fn make_current_main_thread(ctx: &Context) {
 
     // The current thread is not the main thread.
 
-    // Lock order: PID table -> tasks of process
+    // Lock order: PID table -> tracer.tracees -> tasks of process
     let mut pid_table = pid_table::pid_table_mut();
+    let tracer = ctx.posix_thread.tracer();
+    let mut tracer_tracees = tracer
+        .as_ref()
+        .map(|tracer| tracer.as_posix_thread().unwrap().tracees().unwrap().lock());
     let mut tasks = ctx.process.tasks().lock();
 
     assert!(tasks.has_exited_main());
@@ -253,7 +270,15 @@ fn make_current_main_thread(ctx: &Context) {
 
     tasks.swap_main(pid, old_tid);
     ctx.posix_thread.set_main(pid);
+
+    if let Some(tracer_tracees) = tracer_tracees.as_mut()
+        && let Some(tracee) = tracer_tracees.remove(&old_tid)
+    {
+        tracer_tracees.insert(pid, tracee);
+    }
+
     drop(tasks);
+    drop(tracer_tracees);
 
     let thread = pid_table.take_thread(old_tid).unwrap();
     pid_table.replace_thread(pid, &thread);

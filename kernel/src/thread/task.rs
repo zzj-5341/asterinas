@@ -10,11 +10,11 @@ use ostd::{
 
 use super::{Thread, oops};
 use crate::{
+    context::current_userspace,
     cpu::LinuxAbi,
-    current_userspace,
     prelude::*,
     process::{
-        posix_thread::{AsPosixThread, AsThreadLocal, ThreadLocal},
+        posix_thread::{AsPosixThread, AsThreadLocal, FIRST_POSIX_TID, ThreadLocal},
         signal::{HandlePendingSignal, PauseReason, handle_pending_signal},
     },
     syscall::handle_syscall,
@@ -39,16 +39,10 @@ pub fn create_new_user_task(
         let mut user_mode = UserMode::new(user_ctx);
         user_mode.context_mut().activate_tls_pointer();
         debug!(
-            "[Task entry] rip = 0x{:x}",
-            user_mode.context().instruction_pointer()
-        );
-        debug!(
-            "[Task entry] rsp = 0x{:x}",
-            user_mode.context().stack_pointer()
-        );
-        debug!(
-            "[Task entry] rax = 0x{:x}",
-            user_mode.context().syscall_ret()
+            "task entry: rip = {:#x}, rsp = {:#x}, rax = {:#x}",
+            user_mode.context().instruction_pointer(),
+            user_mode.context().stack_pointer(),
+            user_mode.context().syscall_ret(),
         );
 
         // The `clone` syscall may require the child process to write its thread TID to the
@@ -71,7 +65,8 @@ pub fn create_new_user_task(
 
         let has_kernel_event_fn = || ctx.has_pending();
 
-        if ctx.process.is_init_process() {
+        // The startup method is only executed when the first user thread starts up.
+        if ctx.posix_thread.tid() == FIRST_POSIX_TID {
             crate::init::on_first_process_startup(&ctx);
         }
 

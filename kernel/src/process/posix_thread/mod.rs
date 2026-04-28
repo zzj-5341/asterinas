@@ -7,6 +7,7 @@ use ostd::{
     sync::{RoArc, RwMutexReadGuard, Waker},
     task::Task,
 };
+use spin::Once;
 
 use super::{
     Credentials, Process,
@@ -17,11 +18,12 @@ use crate::{
     fs::{file::file_table::FileTable, thread_info::ThreadFsInfo},
     prelude::*,
     process::{
-        Pid,
+        ExitCode, Pid,
         namespace::nsproxy::NsProxy,
+        posix_thread::ptrace::TraceeStatus,
         signal::{PauseReason, PollHandle, sig_mask::SigMask},
     },
-    thread::Tid,
+    thread::{Thread, Tid},
     time::{Timer, TimerManager, clocks::ProfClock, timer::TimerGuard},
 };
 
@@ -31,6 +33,7 @@ mod exit;
 pub mod futex;
 mod name;
 mod posix_thread_ext;
+pub mod ptrace;
 mod robust_list;
 mod thread_local;
 
@@ -90,6 +93,15 @@ pub struct PosixThread {
     timer_slack_ns: AtomicU64,
     /// The default timer slack value for this thread.
     default_timer_slack_ns: AtomicU64,
+
+    /// Status of being traced.
+    tracee_status: Once<TraceeStatus>,
+
+    /// Threads traced by this thread.
+    tracees: Once<Mutex<BTreeMap<Tid, Arc<Thread>>>>,
+
+    /// Exit code of this thread.
+    exit_code: AtomicU32,
 }
 
 impl PosixThread {
@@ -316,6 +328,16 @@ impl PosixThread {
         let default = self.default_timer_slack_ns.load(Ordering::Relaxed);
         self.timer_slack_ns.store(default, Ordering::Relaxed);
     }
+
+    /// Sets the exit code of this thread.
+    pub(super) fn set_exit_code(&self, exit_code: ExitCode) {
+        self.exit_code.store(exit_code, Ordering::Relaxed);
+    }
+
+    /// Returns the exit code of this thread.
+    pub fn exit_code(&self) -> ExitCode {
+        self.exit_code.load(Ordering::Relaxed)
+    }
 }
 
 /// Provides administrative APIs for the current POSIX thread.
@@ -365,11 +387,14 @@ impl ContextPthreadAdminApi for Context<'_> {
     }
 }
 
-static POSIX_TID_ALLOCATOR: AtomicU32 = AtomicU32::new(1);
+/// The TID of the first POSIX thread (i.e., the main thread of the init process).
+pub const FIRST_POSIX_TID: Tid = 1;
 
-/// Allocates a new tid for the new posix thread
+static POSIX_TID_ALLOCATOR: AtomicU32 = AtomicU32::new(FIRST_POSIX_TID);
+
+/// Allocates a new TID for the new POSIX thread.
 pub fn allocate_posix_tid() -> Tid {
-    let tid = POSIX_TID_ALLOCATOR.fetch_add(1, Ordering::SeqCst);
+    let tid = POSIX_TID_ALLOCATOR.fetch_add(1, Ordering::Relaxed);
     if tid >= PID_MAX {
         // When the kernel's next PID value reaches `PID_MAX`,
         // it should wrap back to a minimum PID value.
@@ -383,9 +408,9 @@ pub fn allocate_posix_tid() -> Tid {
     tid
 }
 
-/// Returns the last allocated tid
+/// Returns the last allocated TID.
 pub fn last_tid() -> Tid {
-    POSIX_TID_ALLOCATOR.load(Ordering::SeqCst) - 1
+    POSIX_TID_ALLOCATOR.load(Ordering::Relaxed) - 1
 }
 
 /// The maximum allowed process ID.

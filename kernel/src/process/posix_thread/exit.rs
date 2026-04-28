@@ -8,7 +8,7 @@ use super::{
     robust_list::wake_robust_futex,
 };
 use crate::{
-    current_userspace,
+    context::current_userspace,
     prelude::*,
     process::{
         TermStatus,
@@ -40,6 +40,8 @@ pub fn do_exit_group(term_status: TermStatus) {
 
 /// Exits the current POSIX thread or process.
 fn exit_internal(term_status: TermStatus, is_exiting_group: bool) {
+    let exit_code = term_status.as_u32();
+
     let current_task = Task::current().unwrap();
     let current_thread = current_task.as_thread().unwrap();
     let posix_thread = current_thread.as_posix_thread().unwrap();
@@ -59,8 +61,10 @@ fn exit_internal(term_status: TermStatus, is_exiting_group: bool) {
         // According to Linux's behavior, the last thread's exit code will become the process's
         // exit code, so here we should just overwrite the old value (if any).
         if !has_exited_group && !in_evecve {
-            posix_process.status().set_exit_code(term_status.as_u32());
+            posix_process.status().set_exit_code(exit_code);
         }
+
+        posix_thread.set_exit_code(exit_code);
 
         // We should only change the thread status when running as the thread, so no race
         // conditions can occur in between.
@@ -71,6 +75,16 @@ fn exit_internal(term_status: TermStatus, is_exiting_group: bool) {
 
         tasks.remove_exited(&current_task, posix_thread.tid())
     };
+
+    // This is put after `current_thread.exit()`,
+    // so `attach_tracee` will observe that the tracer has exited while
+    // holding the `tracees` lock, and can not race with `clear_tracees`.
+    posix_thread.clear_tracees();
+
+    if let Some(tracer) = posix_thread.tracer() {
+        let tracer = tracer.as_posix_thread().unwrap();
+        tracer.process().children_wait_queue().wake_all();
+    }
 
     wake_clear_ctid(thread_local);
 

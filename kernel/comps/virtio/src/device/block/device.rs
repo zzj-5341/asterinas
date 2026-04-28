@@ -23,7 +23,7 @@ use device_id::{DeviceId, MinorId};
 use ostd::{
     arch::trap::TrapFrame,
     debug, info,
-    mm::{HasSize, VmIo, dma::DmaStream},
+    mm::{PAGE_SIZE, VmIo, dma::DmaStream},
     sync::SpinLock,
 };
 
@@ -214,30 +214,38 @@ impl DeviceInner {
     /// Creates and inits the device.
     fn init(mut transport: Box<dyn VirtioTransport>) -> Result<Arc<Self>, VirtioDeviceError> {
         let config_manager = VirtioBlockConfig::new_manager(transport.as_ref());
-        debug!("virio_blk_config = {:?}", config_manager.read_config());
-        assert_eq!(
-            config_manager.block_size(),
-            VirtioBlockConfig::sector_size(),
-            "currently not support customized device logical block size"
-        );
+
+        let config = config_manager.read_config();
+        debug!("virio_blk_config = {:?}", config);
+
+        let block_size = config_manager.block_size();
+        if block_size != VirtioBlockConfig::sector_size() {
+            ostd::error!("block size {} is not supported yet", block_size);
+            return Err(VirtioDeviceError::UnsupportedConfig);
+        }
+
         let num_queues = transport.num_queues();
         if num_queues != 1 {
-            // FIXME: support Multi-Queue Block IO Queueing Mechanism
+            // TODO: Support Multi-Queue Block IO Queueing Mechanism
             // (`BlkFeatures::MQ`) to accelerate multi-processor requests for
             // block devices. When SMP is enabled on x86, the feature is on.
-            // We should also consider negotiating the feature in the future.
-            // return Err(VirtioDeviceError::QueuesAmountDoNotMatch(num_queues, 1));
             ostd::warn!(
-                "Not supporting Multi-Queue Block IO Queueing Mechanism, only using the first queue"
+                "Multi-Queue Block IO Queueing Mechanism is not supported yet; using the first queue"
             );
         }
+
         let features = VirtioBlockFeature::new(transport.as_ref());
-        let queue = VirtQueue::new(0, Self::QUEUE_SIZE, transport.as_mut())
-            .expect("create virtqueue failed");
-        let block_requests = Arc::new(DmaStream::alloc(1, false).unwrap());
-        assert!(Self::QUEUE_SIZE as usize * REQ_SIZE <= block_requests.size());
-        let block_responses = Arc::new(DmaStream::alloc(1, false).unwrap());
-        assert!(Self::QUEUE_SIZE as usize * RESP_SIZE <= block_responses.size());
+
+        let queue = VirtQueue::new(0, Self::QUEUE_SIZE, transport.as_mut())?;
+
+        let block_requests =
+            Arc::new(DmaStream::alloc(1, false).map_err(VirtioDeviceError::ResourceAlloc)?);
+        let block_responses =
+            Arc::new(DmaStream::alloc(1, false).map_err(VirtioDeviceError::ResourceAlloc)?);
+        const {
+            assert!(Self::QUEUE_SIZE as usize * REQ_SIZE <= PAGE_SIZE);
+            assert!(Self::QUEUE_SIZE as usize * RESP_SIZE <= PAGE_SIZE);
+        }
 
         let device = Arc::new(Self {
             config_manager,
@@ -276,7 +284,7 @@ impl DeviceInner {
 
     /// Handles the IRQ issued from the device.
     fn handle_irq(&self) {
-        info!("Virtio block device handle IRQ");
+        info!("block device handle IRQ");
         // When we enter the IRQs handling function,
         // IRQs have already been disabled,
         // so there is no need to call `disable_irq`.
@@ -284,7 +292,7 @@ impl DeviceInner {
             // Pops the complete request
             let complete_request = {
                 let mut queue = self.queue.lock();
-                let Ok((token, _)) = queue.pop_used() else {
+                let Ok((token, _)) = queue.pop_used_with_min_bytes(RESP_SIZE) else {
                     return;
                 };
                 self.submitted_requests.lock().remove(&token).unwrap()
@@ -297,10 +305,15 @@ impl DeviceInner {
             resp_slice.sync_from_device().unwrap();
             let resp: BlockResp = resp_slice.read_val(0).unwrap();
             self.id_allocator.dealloc(id);
-            match RespStatus::try_from(resp.status).unwrap() {
-                RespStatus::Ok => {}
-                // FIXME: Return an error instead of triggering a kernel panic
-                _ => panic!("io error in block device"),
+            match RespStatus::try_from(resp.status) {
+                Ok(RespStatus::Ok) => {}
+                _ => {
+                    // Completes the bio request with an error
+                    complete_request.bio_request.bios().for_each(|bio| {
+                        bio.complete(BioStatus::IoError);
+                    });
+                    continue;
+                }
             };
 
             // Synchronize DMA mapping if read from the device
@@ -324,7 +337,7 @@ impl DeviceInner {
     }
 
     fn handle_config_change(&self) {
-        info!("Virtio block device config space change");
+        info!("block device config space change");
     }
 
     /// Reads data from the device, this function is non-blocking.
@@ -493,7 +506,8 @@ impl DeviceInner {
             resp_slice
         };
 
-        let num_used_descs = 1;
+        // One descriptor for the input `req_slice`, one for the output `resp_slice`.
+        let num_used_descs = 2;
         loop {
             let mut queue = self.queue.disable_irq().lock();
             if num_used_descs > queue.available_desc() {

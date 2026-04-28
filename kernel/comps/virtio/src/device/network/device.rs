@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use aster_bigtcp::device::{Checksum, DeviceCapabilities, Medium};
 use aster_network::{AnyNetworkDevice, EthernetAddr, NetError, RxBuffer, TxBuffer};
 use aster_util::slot_vec::SlotVec;
-use ostd::{arch::trap::TrapFrame, debug, mm::VmReader, sync::SpinLock, warn};
+use ostd::{arch::trap::TrapFrame, debug, sync::SpinLock, warn};
 
 use super::{config::VirtioNetConfig, header::VirtioNetHdr};
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
             config::NetworkFeatures,
         },
     },
-    queue::{QueueError, VirtQueue},
+    queue::{self, VirtQueue},
     transport::{ConfigManager, VirtioTransport},
 };
 
@@ -33,6 +33,7 @@ pub struct NetworkDevice {
     header: VirtioNetHdr,
     tx_buffers: Vec<Option<TxBuffer>>,
     rx_buffers: SlotVec<RxBuffer>,
+    new_rx_buffer: Option<RxBuffer>,
     transport: Box<dyn VirtioTransport>,
     poll_stat: PollStatistics,
 }
@@ -60,7 +61,7 @@ impl NetworkDevice {
 
         if network_features != device_features {
             warn!(
-                "Virtio net contains unsupported device features: {:?}",
+                "unsupported device features: {:?}",
                 device_features.difference(supported_features)
             );
         }
@@ -81,20 +82,19 @@ impl NetworkDevice {
 
         let caps = init_caps(&features, &config);
 
-        let mut send_queue = VirtQueue::new(QUEUE_SEND, QUEUE_SIZE, transport.as_mut())
-            .expect("creating send queue fails");
+        let mut send_queue = VirtQueue::new(QUEUE_SEND, QUEUE_SIZE, transport.as_mut())?;
         send_queue.disable_callback();
 
-        let mut recv_queue = VirtQueue::new(QUEUE_RECV, QUEUE_SIZE, transport.as_mut())
-            .expect("creating recv queue fails");
+        let mut recv_queue = VirtQueue::new(QUEUE_RECV, QUEUE_SIZE, transport.as_mut())?;
 
         let tx_buffers = (0..QUEUE_SIZE).map(|_| None).collect();
 
         let mut rx_buffers = SlotVec::new();
         for i in 0..QUEUE_SIZE {
             let rx_pool = RX_BUFFER_POOL.get().unwrap();
-            let rx_buffer = RxBuffer::new(size_of::<VirtioNetHdr>(), rx_pool).unwrap();
-            let token = recv_queue.add_output_bufs(&[&rx_buffer])?;
+            let rx_buffer = RxBuffer::new(size_of::<VirtioNetHdr>(), rx_pool)
+                .map_err(VirtioDeviceError::ResourceAlloc)?;
+            let token = recv_queue.add_output_bufs(&[&rx_buffer]).unwrap();
             assert_eq!(i, token);
             assert_eq!(rx_buffers.put(rx_buffer) as u16, i);
         }
@@ -113,6 +113,7 @@ impl NetworkDevice {
             header: VirtioNetHdr::default(),
             tx_buffers,
             rx_buffers,
+            new_rx_buffer: None,
             transport,
             poll_stat: PollStatistics::new(),
         };
@@ -153,11 +154,8 @@ impl NetworkDevice {
     }
 
     /// Adds a `RxBuffer` to the receive queue.
-    fn add_rx_buffer(&mut self, rx_buffer: RxBuffer) -> Result<(), NetError> {
-        let token = self
-            .recv_queue
-            .add_output_bufs(&[&rx_buffer])
-            .map_err(queue_to_network_error)?;
+    fn add_rx_buffer(&mut self, rx_buffer: RxBuffer) -> Result<(), queue::AddBufsError> {
+        let token = self.recv_queue.add_output_bufs(&[&rx_buffer])?;
         assert!(self.rx_buffers.put_at(token as usize, rx_buffer).is_none());
 
         self.poll_stat.received_packet += 1;
@@ -173,18 +171,28 @@ impl NetworkDevice {
 
     /// Receives a packet from network.
     fn receive(&mut self) -> Result<RxBuffer, NetError> {
-        let (token, len) = self.recv_queue.pop_used().map_err(queue_to_network_error)?;
+        if self.new_rx_buffer.is_none() {
+            // FIXME: Ideally, we can reuse the returned buffer without creating new buffer.
+            // But this requires locking device to be compatible with smoltcp interface.
+            let rx_pool = RX_BUFFER_POOL.get().unwrap();
+            let new_rx_buffer = RxBuffer::new(size_of::<VirtioNetHdr>(), rx_pool)
+                .map_err(|_| NetError::NoMemory)?;
+
+            self.new_rx_buffer = Some(new_rx_buffer);
+        }
+
+        let (token, len) = self
+            .recv_queue
+            .pop_used_with_min_bytes(size_of::<VirtioNetHdr>())
+            .map_err(|_| NetError::NotReady)?;
         debug!("receive packet: token = {}, len = {}", token, len);
-        let mut rx_buffer = self
-            .rx_buffers
-            .remove(token as usize)
-            .ok_or(NetError::WrongToken)?;
-        rx_buffer.set_packet_len(len as usize - size_of::<VirtioNetHdr>());
-        // FIXME: Ideally, we can reuse the returned buffer without creating new buffer.
-        // But this requires locking device to be compatible with smoltcp interface.
-        let rx_pool = RX_BUFFER_POOL.get().unwrap();
-        let new_rx_buffer = RxBuffer::new(size_of::<VirtioNetHdr>(), rx_pool).unwrap();
-        self.add_rx_buffer(new_rx_buffer)?;
+
+        let mut rx_buffer = self.rx_buffers.remove(token as usize).unwrap();
+        rx_buffer.set_payload_len(len as usize - size_of::<VirtioNetHdr>());
+
+        let new_rx_buffer = self.new_rx_buffer.take().unwrap();
+        self.add_rx_buffer(new_rx_buffer).unwrap();
+
         Ok(rx_buffer)
     }
 
@@ -195,17 +203,10 @@ impl NetworkDevice {
         }
 
         let tx_pool = TX_BUFFER_POOL.get().unwrap();
-        let tx_buffer = TxBuffer::new(
-            &self.header,
-            &mut VmReader::from(packet).to_fallible(),
-            tx_pool,
-        )
-        .unwrap();
+        let tx_buffer =
+            TxBuffer::new(&self.header, packet, tx_pool).map_err(|_| NetError::NoMemory)?;
 
-        let token = self
-            .send_queue
-            .add_input_bufs(&[&tx_buffer])
-            .map_err(queue_to_network_error)?;
+        let token = self.send_queue.add_input_bufs(&[&tx_buffer]).unwrap();
 
         self.poll_stat.sent_packet += 1;
 
@@ -266,15 +267,6 @@ impl NetworkDevice {
         }
 
         self.poll_stat.received_packet = 0;
-    }
-}
-
-fn queue_to_network_error(err: QueueError) -> NetError {
-    match err {
-        QueueError::NotReady => NetError::NotReady,
-        QueueError::WrongToken => NetError::WrongToken,
-        QueueError::BufferTooSmall => NetError::Busy,
-        _ => NetError::Unknown,
     }
 }
 
