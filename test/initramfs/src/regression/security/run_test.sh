@@ -15,4 +15,4 @@ set -e
 ./namespace/setns
 ./namespace/unshare
 
-./yama/pidfd_getfd_scope
+./lsm/yama
