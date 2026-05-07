@@ -2,7 +2,7 @@
 
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use super::super::{LsmKind, LsmModule, PtraceAccessContext, PtraceAccessKind};
+use super::super::{LsmKind, LsmModule, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind};
 use crate::{
     prelude::*,
     process::{
@@ -10,20 +10,12 @@ use crate::{
     },
 };
 
-pub(crate) static YAMA_LSM: YamaLsm = YamaLsm;
+pub static YAMA_LSM: YamaLsm = YamaLsm;
 
 /// Implements the Yama minor LSM.
-pub(crate) struct YamaLsm;
+pub struct YamaLsm;
 
-impl LsmModule for YamaLsm {
-    fn name(&self) -> &'static str {
-        "yama"
-    }
-
-    fn kind(&self) -> LsmKind {
-        LsmKind::Minor
-    }
-
+impl LsmPtraceCheck for YamaLsm {
     fn ptrace_access_check(&self, context: &PtraceAccessContext<'_>) -> Result<()> {
         if context.mode().kind() != PtraceAccessKind::Attach {
             return Ok(());
@@ -50,13 +42,25 @@ impl LsmModule for YamaLsm {
     }
 }
 
+impl LsmModule for YamaLsm {
+    fn name(&self) -> &'static str {
+        "yama"
+    }
+
+    fn kind(&self) -> LsmKind {
+        LsmKind::Minor
+    }
+
+    fn init(&self) {}
+}
+
 /// Returns the current Yama scope for alien access.
-pub(crate) fn get_yama_scope() -> YamaScope {
+pub fn get_yama_scope() -> YamaScope {
     YAMA_SCOPE.load(Ordering::Relaxed).try_into().unwrap()
 }
 
 /// Sets the Yama scope for alien access.
-pub(crate) fn set_yama_scope(new_scope: YamaScope) -> Result<()> {
+pub fn set_yama_scope(new_scope: YamaScope) -> Result<()> {
     UserNamespace::get_init_singleton().check_cap(
         CapSet::SYS_PTRACE,
         current_thread!().as_posix_thread().unwrap(),
@@ -83,7 +87,7 @@ static YAMA_SCOPE: AtomicI32 = AtomicI32::new(YamaScope::Relational as i32);
 /// The Yama scope levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromInt)]
 #[repr(i32)]
-pub(crate) enum YamaScope {
+pub enum YamaScope {
     /// No additional restrictions on alien attach.
     Disabled = 0,
     /// Only allow alien attach by ancestor processes, or processes with `CapSet::SYS_PTRACE`.
