@@ -95,7 +95,8 @@ static pid_t spawn_target_process(bool drop_ptrace_cap)
 			drop_cap_sys_ptrace();
 		}
 
-		int fd = CHECK(open(TESTFILE, O_CREAT | O_RDWR | O_TRUNC, 0644));
+		int fd =
+			CHECK(open(TESTFILE, O_CREAT | O_RDWR | O_TRUNC, 0644));
 		CHECK_WITH(write(fd, TEST_CONTENT, strlen(TEST_CONTENT)),
 			   _ret == (ssize_t)strlen(TEST_CONTENT));
 		CHECK(dup2(fd, TARGET_FD));
