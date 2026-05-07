@@ -3,6 +3,6 @@
 SUBDIRS := \
 	capability \
 	namespace \
-	yama \
+	lsm \
 
 include ../common/Makefile
