@@ -4,12 +4,10 @@
 //!
 //! An alien thread is one outside the current thread's thread group (the process).
 
-use bitflags::bitflags;
-
 use crate::{
     prelude::*,
     process::{credentials::capabilities::CapSet, posix_thread::PosixThread},
-    security::{self, PtraceAccessContext, PtraceAccessCreds, PtraceAccessKind, PtraceAccessMode},
+    security::{self, CredsSource, PtraceAccessContext, PtraceAccessMode},
 };
 
 impl PosixThread {
@@ -28,7 +26,7 @@ impl PosixThread {
         }
 
         let cred = accessor.credentials();
-        let (caller_uid, caller_gid) = if mode.1 == CredsSource::FsCreds {
+        let (caller_uid, caller_gid) = if mode.creds() == CredsSource::FsCreds {
             (cred.fsuid(), cred.fsgid())
         } else {
             (cred.ruid(), cred.rgid())
@@ -58,7 +56,7 @@ impl PosixThread {
         security::ptrace_access_check(&PtraceAccessContext::new(
             accessor,
             self,
-            mode.into(),
+            mode,
             caller_has_cap,
         ))?;
 
@@ -67,49 +65,4 @@ impl PosixThread {
 }
 
 /// The mode used by the alien access permission check.
-#[derive(Clone, Copy)]
-pub struct AlienAccessMode(AlienAccessFlags, CredsSource);
-
-impl AlienAccessMode {
-    /// Read-only alien access check, using real credentials (`ruid`/`rgid`).
-    #[expect(dead_code)]
-    pub const READ_WITH_REAL_CREDS: Self = Self(AlienAccessFlags::READ, CredsSource::RealCreds);
-    /// Attach-level alien access check, using real credentials (`ruid`/`rgid`).
-    pub const ATTACH_WITH_REAL_CREDS: Self = Self(AlienAccessFlags::ATTACH, CredsSource::RealCreds);
-    /// Read-only alien access check, using filesystem credentials (`fsuid`/`fsgid`).
-    pub const READ_WITH_FS_CREDS: Self = Self(AlienAccessFlags::READ, CredsSource::FsCreds);
-    /// Attach-level alien access check, using filesystem credentials (`fsuid`/`fsgid`).
-    pub const ATTACH_WITH_FS_CREDS: Self = Self(AlienAccessFlags::ATTACH, CredsSource::FsCreds);
-}
-
-bitflags! {
-    /// Access strength in the alien access permission check.
-    struct AlienAccessFlags: u32 {
-        const READ       = 0x01;
-        const ATTACH     = 0x02;
-    }
-}
-
-/// The credentials used in the alien access permission check.
-#[derive(Clone, Copy, PartialEq)]
-enum CredsSource {
-    FsCreds,
-    RealCreds,
-}
-
-impl From<AlienAccessMode> for PtraceAccessMode {
-    fn from(mode: AlienAccessMode) -> Self {
-        let kind = if mode.0.contains(AlienAccessFlags::ATTACH) {
-            PtraceAccessKind::Attach
-        } else {
-            PtraceAccessKind::Read
-        };
-        let creds = if mode.1 == CredsSource::FsCreds {
-            PtraceAccessCreds::Fs
-        } else {
-            PtraceAccessCreds::Real
-        };
-
-        PtraceAccessMode::new(kind, creds)
-    }
-}
+pub type AlienAccessMode = PtraceAccessMode;

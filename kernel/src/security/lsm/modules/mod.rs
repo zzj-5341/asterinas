@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-pub(crate) mod yama;
+pub mod yama;
 
 use super::LsmModule;
 

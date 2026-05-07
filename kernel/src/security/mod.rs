@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-pub(crate) mod lsm;
+pub mod lsm;
 
 use cfg_if::cfg_if;
 
@@ -11,9 +11,7 @@ cfg_if! {
     }
 }
 
-pub(crate) use self::lsm::{
-    PtraceAccessContext, PtraceAccessCreds, PtraceAccessKind, PtraceAccessMode,
-};
+pub use self::lsm::{CredsSource, PtraceAccessContext, PtraceAccessKind, PtraceAccessMode};
 use crate::prelude::*;
 
 pub(super) fn init() {
@@ -27,6 +25,6 @@ pub(super) fn init() {
 }
 
 /// Runs the LSM stack for a ptrace-style access check.
-pub(crate) fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
+pub fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
     lsm::ptrace_access_check(context)
 }
