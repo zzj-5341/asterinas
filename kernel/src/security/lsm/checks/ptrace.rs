@@ -1,30 +1,31 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use super::super::modules;
 use crate::{prelude::*, process::posix_thread::PosixThread};
 
-/// Defines ptrace-style hooks supported by built-in LSM modules.
+/// Defines hooks for ptrace access checks.
 pub trait LsmPtraceCheck: Sync {
-    /// Checks ptrace-style access between unrelated tasks.
-    fn ptrace_access_check(&self, _context: &PtraceAccessContext<'_>) -> Result<()> {
+    /// Checks whether the accessor may inspect or attach to the target.
+    fn ptrace_access_check(&self, _context: &PtraceAccessContext) -> Result<()> {
         Ok(())
     }
 }
 
-/// Describes which credentials should be used by a ptrace-style access check.
+/// The credentials used by a ptrace access check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredsSource {
     FsCreds,
     RealCreds,
 }
 
-/// Describes the strength of a ptrace-style access check.
+/// The strength of a ptrace access check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtraceAccessKind {
     Read,
     Attach,
 }
 
-/// Describes a ptrace-style access check.
+/// A ptrace access check mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtraceAccessMode {
     kind: PtraceAccessKind,
@@ -32,16 +33,16 @@ pub struct PtraceAccessMode {
 }
 
 impl PtraceAccessMode {
-    /// Read-only ptrace-style access check using real credentials.
+    /// Read-only ptrace access check using real credentials.
     #[expect(dead_code)]
     pub const READ_WITH_REAL_CREDS: Self =
         Self::new(PtraceAccessKind::Read, CredsSource::RealCreds);
-    /// Attach-level ptrace-style access check using real credentials.
+    /// Attach-level ptrace access check using real credentials.
     pub const ATTACH_WITH_REAL_CREDS: Self =
         Self::new(PtraceAccessKind::Attach, CredsSource::RealCreds);
-    /// Read-only ptrace-style access check using filesystem credentials.
+    /// Read-only ptrace access check using filesystem credentials.
     pub const READ_WITH_FS_CREDS: Self = Self::new(PtraceAccessKind::Read, CredsSource::FsCreds);
-    /// Attach-level ptrace-style access check using filesystem credentials.
+    /// Attach-level ptrace access check using filesystem credentials.
     pub const ATTACH_WITH_FS_CREDS: Self =
         Self::new(PtraceAccessKind::Attach, CredsSource::FsCreds);
 
@@ -58,12 +59,12 @@ impl PtraceAccessMode {
     }
 }
 
-/// Carries the inputs for a ptrace-style access check through the LSM stack.
+/// The inputs for a ptrace access check through the LSM stack.
 pub struct PtraceAccessContext<'a> {
     accessor: &'a PosixThread,
     target: &'a PosixThread,
     mode: PtraceAccessMode,
-    accessor_has_sys_ptrace: bool,
+    accessor_has_cap_sys_ptrace: bool,
 }
 
 impl<'a> PtraceAccessContext<'a> {
@@ -71,13 +72,13 @@ impl<'a> PtraceAccessContext<'a> {
         accessor: &'a PosixThread,
         target: &'a PosixThread,
         mode: PtraceAccessMode,
-        accessor_has_sys_ptrace: bool,
+        accessor_has_cap_sys_ptrace: bool,
     ) -> Self {
         Self {
             accessor,
             target,
             mode,
-            accessor_has_sys_ptrace,
+            accessor_has_cap_sys_ptrace,
         }
     }
 
@@ -93,7 +94,16 @@ impl<'a> PtraceAccessContext<'a> {
         self.mode
     }
 
-    pub const fn accessor_has_sys_ptrace(&self) -> bool {
-        self.accessor_has_sys_ptrace
+    pub const fn accessor_has_cap_sys_ptrace(&self) -> bool {
+        self.accessor_has_cap_sys_ptrace
     }
+}
+
+/// Runs ptrace access hooks in module order.
+pub fn ptrace_access_check(context: &PtraceAccessContext) -> Result<()> {
+    for module in modules::active_modules() {
+        module.ptrace_access_check(context)?;
+    }
+
+    Ok(())
 }

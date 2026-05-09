@@ -11,9 +11,6 @@ cfg_if! {
     }
 }
 
-pub use self::lsm::{CredsSource, PtraceAccessContext, PtraceAccessKind, PtraceAccessMode};
-use crate::prelude::*;
-
 pub(super) fn init() {
     lsm::init();
 
@@ -22,9 +19,4 @@ pub(super) fn init() {
         tsm::init();
         tsm_mr::init();
     });
-}
-
-/// Runs the LSM stack for a ptrace-style access check.
-pub fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
-    lsm::ptrace_access_check(context)
 }

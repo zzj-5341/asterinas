@@ -7,7 +7,7 @@
 use crate::{
     prelude::*,
     process::{credentials::capabilities::CapSet, posix_thread::PosixThread},
-    security::{self, CredsSource, PtraceAccessContext, PtraceAccessMode},
+    security::lsm::{self, CredsSource, PtraceAccessContext, PtraceAccessMode},
 };
 
 impl PosixThread {
@@ -53,7 +53,7 @@ impl PosixThread {
             );
         }
 
-        security::ptrace_access_check(&PtraceAccessContext::new(
+        lsm::ptrace_access_check(&PtraceAccessContext::new(
             accessor,
             self,
             mode,
@@ -64,5 +64,4 @@ impl PosixThread {
     }
 }
 
-/// The mode used by the alien access permission check.
 pub type AlienAccessMode = PtraceAccessMode;
