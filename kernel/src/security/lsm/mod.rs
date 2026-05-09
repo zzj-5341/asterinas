@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Implements the Linux Security Module (LSM) framework used by the kernel.
+//! The Linux Security Module (LSM) framework.
 //!
 //! LSM lets the kernel route security-sensitive operations through a stack of
 //! built-in policy modules. Each module can implement shared hook traits and
 //! inspect common hook contexts before allowing or rejecting an operation.
 //!
-//! This module defines the common LSM traits, ptrace-style hook contexts, and
+//! This module defines the common LSM traits, ptrace hook contexts, and
 //! dispatch helpers shared by built-in modules such as `yama`.
 
 mod checks;
@@ -15,6 +15,7 @@ mod modules;
 pub use self::{
     checks::ptrace::{
         CredsSource, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind, PtraceAccessMode,
+        ptrace_access_check,
     },
     modules::yama::{YamaScope, get_yama_scope, set_yama_scope},
 };
@@ -24,6 +25,7 @@ use crate::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LsmKind {
     Minor,
+    #[expect(dead_code)]
     Major,
 }
 
@@ -57,13 +59,4 @@ pub(super) fn init() {
         );
         module.init();
     }
-}
-
-/// Runs ptrace-style access hooks in module order.
-pub fn ptrace_access_check(context: &PtraceAccessContext<'_>) -> Result<()> {
-    for module in modules::active_modules() {
-        module.ptrace_access_check(context)?;
-    }
-
-    Ok(())
 }

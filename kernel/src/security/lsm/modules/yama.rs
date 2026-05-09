@@ -12,11 +12,11 @@ use crate::{
 
 pub static YAMA_LSM: YamaLsm = YamaLsm;
 
-/// Implements the Yama minor LSM.
+/// The Yama minor LSM.
 pub struct YamaLsm;
 
 impl LsmPtraceCheck for YamaLsm {
-    fn ptrace_access_check(&self, context: &PtraceAccessContext<'_>) -> Result<()> {
+    fn ptrace_access_check(&self, context: &PtraceAccessContext) -> Result<()> {
         if context.mode().kind() != PtraceAccessKind::Attach {
             return Ok(());
         }
@@ -24,13 +24,13 @@ impl LsmPtraceCheck for YamaLsm {
         let is_denied = match get_yama_scope() {
             YamaScope::Disabled => false,
             YamaScope::Relational => {
-                !context.accessor_has_sys_ptrace()
+                !context.accessor_has_cap_sys_ptrace()
                     && !is_ancestor_of(
                         context.accessor().weak_process(),
                         context.target().process(),
                     )
             }
-            YamaScope::Capability => !context.accessor_has_sys_ptrace(),
+            YamaScope::Capability => !context.accessor_has_cap_sys_ptrace(),
             YamaScope::NoAttach => true,
         };
 
@@ -85,8 +85,8 @@ pub fn set_yama_scope(new_scope: YamaScope) -> Result<()> {
 static YAMA_SCOPE: AtomicI32 = AtomicI32::new(YamaScope::Relational as i32);
 
 /// The Yama scope levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromInt)]
 #[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromInt)]
 pub enum YamaScope {
     /// No additional restrictions on alien attach.
     Disabled = 0,

@@ -149,21 +149,11 @@ FN_TEST(relational_denies_sibling_pidfd_getfd)
 	if (attacker_pid == 0) {
 		drop_cap_sys_ptrace();
 
-		int pidfd = pidfd_open_syscall(target_pid);
-		if (pidfd < 0) {
-			_exit(10);
-		}
+		int pidfd = CHECK(pidfd_open_syscall(target_pid));
 
-		int duplicated_fd = pidfd_getfd_syscall(pidfd, TARGET_FD);
-		int saved_errno = errno;
-		close(pidfd);
-		if (duplicated_fd >= 0) {
-			close(duplicated_fd);
-			_exit(11);
-		}
-		if (saved_errno != EPERM) {
-			_exit(12);
-		}
+		CHECK_WITH(pidfd_getfd_syscall(pidfd, TARGET_FD),
+			   _ret < 0 && errno == EPERM);
+		CHECK(close(pidfd));
 		_exit(EXIT_SUCCESS);
 	}
 
@@ -185,29 +175,18 @@ FN_TEST(disabled_allows_sibling_pidfd_getfd)
 	if (attacker_pid == 0) {
 		drop_cap_sys_ptrace();
 
-		int pidfd = pidfd_open_syscall(target_pid);
-		if (pidfd < 0) {
-			_exit(20);
-		}
-
-		int duplicated_fd = pidfd_getfd_syscall(pidfd, TARGET_FD);
-		if (duplicated_fd < 0) {
-			close(pidfd);
-			_exit(21);
-		}
+		int pidfd = CHECK(pidfd_open_syscall(target_pid));
+		int duplicated_fd =
+			CHECK(pidfd_getfd_syscall(pidfd, TARGET_FD));
 
 		char buf[32] = { 0 };
-		ssize_t len = pread(duplicated_fd, buf, sizeof(buf) - 1, 0);
-		close(duplicated_fd);
-		close(pidfd);
-		if (len < 0) {
-			_exit(22);
-		}
+		ssize_t len =
+			CHECK(pread(duplicated_fd, buf, sizeof(buf) - 1, 0));
+		CHECK(close(duplicated_fd));
+		CHECK(close(pidfd));
 
 		buf[len] = '\0';
-		if (strcmp(buf, TEST_CONTENT) != 0) {
-			_exit(23);
-		}
+		CHECK_WITH(strcmp(buf, TEST_CONTENT), _ret == 0);
 
 		_exit(EXIT_SUCCESS);
 	}
