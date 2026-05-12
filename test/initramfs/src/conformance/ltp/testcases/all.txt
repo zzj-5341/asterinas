@@ -8,8 +8,8 @@
 # accept4_01
 
 # access01
-# access02
-# access03
+access02
+access03
 # access04
 
 # acct01
@@ -71,10 +71,10 @@ capset04
 chdir04
 
 chmod01
-# chmod03
+chmod03
 # chmod05
 # chmod06
-# chmod07
+chmod07
 chmod08
 # chmod09
 
@@ -232,7 +232,7 @@ faccessat01
 faccessat02
 
 #faccessat2 test cases
-# faccessat201
+faccessat201
 # faccessat202
 
 #fallocate test cases
@@ -266,18 +266,18 @@ fchdir02
 # fchdir03
 
 fchmod01
-# fchmod02
-# fchmod03
-# fchmod04
+fchmod02
+fchmod03
+fchmod04
 # fchmod05
 # fchmod06
 
 #fchmodat test cases
 fchmodat01
-# fchmodat02
+fchmodat02
 
 # fchmodat2_01
-# fchmodat2_02
+fchmodat2_02
 
 fchown01
 # fchown01_16
@@ -782,8 +782,8 @@ lseek07
 
 lstat01
 lstat01_64
-# lstat02
-# lstat02_64
+lstat02
+lstat02_64
 # lstat03
 # lstat03_64
 
@@ -821,11 +821,11 @@ mkdirat01
 # mkdirat02
 
 mknod01
-# mknod02
+mknod02
 # mknod03
 # mknod04
 # mknod05
-# mknod06
+mknod06
 # mknod07
 # mknod08
 mknod09
@@ -1196,12 +1196,12 @@ read04
 # readdir01
 # readdir21
 
-# readlink01
-# readlink03
+readlink01
+readlink03
 
 #readlinkat test cases
-# readlinkat01
-# readlinkat02
+readlinkat01
+readlinkat02
 
 readv01
 # readv02
@@ -1323,7 +1323,7 @@ select03
 # semctl04
 # semctl05
 # semctl06
-# semctl07
+semctl07
 # semctl08
 # semctl09
 
@@ -1333,7 +1333,7 @@ semget01
 
 # semop01
 # semop02
-# semop03
+semop03
 # semop04
 # semop05
 
@@ -1650,7 +1650,7 @@ string01
 # switch01
 
 symlink02
-# symlink03
+symlink03
 symlink04
 
 #symlinkat test cases
@@ -1739,7 +1739,7 @@ uname02
 # uname04
 
 unlink05
-# unlink07
+unlink07
 # unlink08
 # unlink09
 # unlink10

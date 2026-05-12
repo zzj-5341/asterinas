@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use aster_rights::ReadOp;
-use ostd::sync::PreemptDisabled;
 
-use super::sem::{PendingOp, Status, update_pending_alter, wake_const_ops};
+use super::sem::{
+    PendingBlocker, PendingOp, Semaphore, Status, update_pending_alter, wake_const_ops,
+};
 use crate::{
-    ipc::{IpcNamespace, IpcPermission, key_t, semaphore::system_v::sem::Semaphore},
+    ipc::{IpcKey, IpcPermission},
     prelude::*,
     process::{Credentials, Pid},
     time::clocks::RealTimeCoarseClock,
@@ -20,12 +21,12 @@ use crate::{
 pub const SEMMNI: usize = 32000;
 /// Maximum number of semaphores per semaphore ID.
 pub const SEMMSL: usize = 32000;
-/// Maximum number of seaphores in all semaphore sets.
+/// Maximum number of semaphores in all semaphore sets.
 #[expect(dead_code)]
 pub const SEMMNS: usize = SEMMNI * SEMMSL;
 /// Maximum number of operations for semop.
 pub const SEMOPM: usize = 500;
-/// MAximum semaphore value.
+/// Maximum semaphore value.
 pub const SEMVMX: i32 = 32767;
 /// Maximum value that can be recorded for semaphore adjustment (SEM_UNDO).
 #[expect(dead_code)]
@@ -36,22 +37,20 @@ pub struct SemaphoreSet {
     /// Number of semaphores in the set
     num_sems: usize,
     /// Inner
-    inner: SpinLock<SemSetInner>,
+    inner: Mutex<SemSetInner>,
     /// Semaphore permission
     permission: IpcPermission,
     /// Creation time or last modification via `semctl`
     sem_ctime: AtomicU64,
-    /// Last semop time.
+    /// Last `semop` time
     sem_otime: AtomicU64,
-    /// The IPC namespace.
-    ipc_ns: Weak<IpcNamespace>,
 }
 
 // Reference: <https://elixir.bootlin.com/linux/v6.18/source/include/uapi/asm-generic/ipcbuf.h#L22>.
 #[padding_struct]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod)]
-pub struct IpcPerm {
+struct IpcPerm {
     key: u32,
     uid: u32,
     gid: u32,
@@ -123,32 +122,41 @@ impl SemSetInner {
 }
 
 impl SemaphoreSet {
-    pub fn pending_const_count(&self, sem_num: u16) -> usize {
-        let inner = self.inner.lock();
-        let pending_const = &inner.pending_const;
-        let mut count = 0;
-        for i in pending_const.iter() {
-            for sem_buf in i.sops_iter() {
-                if sem_buf.sem_num() == sem_num {
-                    count += 1;
-                }
-            }
+    /// Counts the number of pending operations waiting for the semaphore at `sem_num` to become
+    /// zero.
+    pub fn pending_zero_count(&self, sem_num: usize) -> Result<usize> {
+        if sem_num >= self.num_sems {
+            return_errno_with_message!(Errno::EINVAL, "the semaphore number is out of bounds");
         }
-        count
+
+        let inner = self.inner.lock();
+        let count_const = inner
+            .pending_const
+            .iter()
+            .filter(|op| op.blocker(&inner.sems) == Ok(PendingBlocker::Zero(sem_num)))
+            .count();
+        let count_alter = inner
+            .pending_alter
+            .iter()
+            .filter(|op| op.blocker(&inner.sems) == Ok(PendingBlocker::Zero(sem_num)))
+            .count();
+        Ok(count_const + count_alter)
     }
 
-    pub fn pending_alter_count(&self, sem_num: u16) -> usize {
-        let inner = self.inner.lock();
-        let pending_alter = &inner.pending_alter;
-        let mut count = 0;
-        for i in pending_alter.iter() {
-            for sem_buf in i.sops_iter() {
-                if sem_buf.sem_num() == sem_num {
-                    count += 1;
-                }
-            }
+    /// Counts the number of pending operations waiting for the semaphore at `sem_num` to be able to
+    /// decrease by a certain amount.
+    pub fn pending_decrease_count(&self, sem_num: usize) -> Result<usize> {
+        if sem_num >= self.num_sems {
+            return_errno_with_message!(Errno::EINVAL, "the semaphore number is out of bounds");
         }
-        count
+
+        let inner = self.inner.lock();
+        let count = inner
+            .pending_alter
+            .iter()
+            .filter(|op| op.blocker(&inner.sems) == Ok(PendingBlocker::Decrease(sem_num)))
+            .count();
+        Ok(count)
     }
 
     pub fn num_sems(&self) -> usize {
@@ -157,39 +165,48 @@ impl SemaphoreSet {
 
     pub fn setval(&self, sem_num: usize, val: i32, pid: Pid) -> Result<()> {
         if !(0..=SEMVMX).contains(&val) {
-            return_errno_with_message!(Errno::ERANGE, "semaphore value out of range");
+            return_errno_with_message!(Errno::ERANGE, "the semaphore value exceeds SEMVMX");
         }
 
         let mut inner = self.inner();
         let (sems, pending_alter, pending_const) = inner.field_mut();
-        let sem = sems.get_mut(sem_num).ok_or(Error::new(Errno::EINVAL))?;
+        let Some(sem) = sems.get_mut(sem_num) else {
+            return_errno_with_message!(Errno::EINVAL, "the semaphore number is out of bounds");
+        };
 
         sem.set_val(val);
         sem.set_latest_modified_pid(pid);
 
         let mut wake_queue = LinkedList::new();
+        let mut has_completed_op = false;
         if val == 0 {
-            wake_const_ops(sems, pending_const, &mut wake_queue);
-        } else {
-            update_pending_alter(sems, pending_alter, pending_const, &mut wake_queue);
+            has_completed_op |= wake_const_ops(sems, pending_const, &mut wake_queue);
         }
+        has_completed_op |=
+            update_pending_alter(sems, pending_alter, pending_const, &mut wake_queue);
 
         for wake_op in wake_queue {
-            wake_op.set_status(Status::Normal);
             if let Some(waker) = wake_op.waker() {
                 waker.wake_up();
             }
         }
 
         self.update_ctime();
+        if has_completed_op {
+            self.update_otime();
+        }
+
         Ok(())
     }
 
-    pub fn get<T>(&self, sem_num: usize, func: &dyn Fn(&Semaphore) -> T) -> Result<T> {
+    pub fn get<T>(&self, sem_num: usize, func: fn(&Semaphore) -> T) -> Result<T> {
         let inner = self.inner();
-        Ok(func(
-            inner.sems.get(sem_num).ok_or(Error::new(Errno::EINVAL))?,
-        ))
+        let Some(sem) = inner.sems.get(sem_num) else {
+            return_errno_with_message!(Errno::EINVAL, "the semaphore number is out of bounds");
+        };
+
+        let result = func(sem);
+        Ok(result)
     }
 
     pub fn permission(&self) -> &IpcPermission {
@@ -210,19 +227,21 @@ impl SemaphoreSet {
         );
     }
 
-    pub(super) fn inner(&self) -> SpinLockGuard<'_, SemSetInner, PreemptDisabled> {
+    pub(super) fn inner(&self) -> MutexGuard<'_, SemSetInner> {
         self.inner.lock()
     }
 
     pub(in crate::ipc) fn new(
-        key: key_t,
+        key: IpcKey,
         num_sems: usize,
         mode: u16,
-        credentials: Credentials<ReadOp>,
-        ipc_ns: &Arc<IpcNamespace>,
+        credentials: &Credentials<ReadOp>,
     ) -> Result<Self> {
+        if num_sems == 0 {
+            return_errno_with_message!(Errno::EINVAL, "the number of semaphores is zero")
+        }
         if num_sems > SEMMSL {
-            return_errno_with_message!(Errno::EINVAL, "num_sems exceeds SEMMSL");
+            return_errno_with_message!(Errno::EINVAL, "the number of semaphores exceeds SEMMSL");
         }
 
         let mut sems = Vec::with_capacity(num_sems);
@@ -238,18 +257,17 @@ impl SemaphoreSet {
             permission,
             sem_ctime: AtomicU64::new(RealTimeCoarseClock::get().read_time().as_secs()),
             sem_otime: AtomicU64::new(0),
-            inner: SpinLock::new(SemSetInner {
+            inner: Mutex::new(SemSetInner {
                 sems: sems.into_boxed_slice(),
                 pending_alter: LinkedList::new(),
                 pending_const: LinkedList::new(),
             }),
-            ipc_ns: Arc::downgrade(ipc_ns),
         })
     }
 
     pub fn semid_ds(&self) -> SemidDs {
         let ipc_perm = IpcPerm {
-            key: self.permission.key() as u32,
+            key: self.permission.key().cast_unsigned(),
             uid: self.permission.uid().into(),
             gid: self.permission.gid().into(),
             cuid: self.permission.cuid().into(),
@@ -270,7 +288,8 @@ impl SemaphoreSet {
 
 impl Drop for SemaphoreSet {
     fn drop(&mut self) {
-        let mut inner = self.inner();
+        let inner = self.inner.get_mut();
+
         let pending_alter = &mut inner.pending_alter;
         for pending_alter in pending_alter.iter_mut() {
             pending_alter.set_status(Status::Removed);
@@ -288,17 +307,5 @@ impl Drop for SemaphoreSet {
             }
         }
         pending_const.clear();
-        drop(inner);
-
-        if let Some(ipc_ns) = self.ipc_ns.upgrade() {
-            ipc_ns.free_sem_key(self.permission.key());
-        } else {
-            // `upgrade()` returns `None` when the IPC namespace itself is being destroyed.
-            // In that path, dropping the namespace's semaphore-set map
-            // cascades into `SemaphoreSet::drop`,
-            // after the last strong reference to the namespace is already gone.
-            // Skipping `free_sem_key()` is correct
-            // because the namespace's ID allocator is being dropped together with the namespace.
-        }
     }
 }

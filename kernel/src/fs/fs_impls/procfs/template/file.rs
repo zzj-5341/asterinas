@@ -8,6 +8,7 @@ use super::Common;
 use crate::{
     fs::{
         file::{AccessMode, FileIo, InodeMode, InodeType, StatusFlags},
+        procfs::{BLOCK_SIZE, ProcFs},
         vfs::{
             file_system::FileSystem,
             inode::{Extension, Inode, InodeIo, Metadata, SymbolicLink},
@@ -15,6 +16,7 @@ use crate::{
     },
     prelude::*,
     process::{Gid, Uid},
+    thread::Thread,
 };
 
 pub struct ProcFile<F: FileOps> {
@@ -23,13 +25,18 @@ pub struct ProcFile<F: FileOps> {
 }
 
 impl<F: FileOps> ProcFile<F> {
-    pub(super) fn new(
-        file: F,
-        fs: Weak<dyn FileSystem>,
-        is_volatile: bool,
-        mode: InodeMode,
-    ) -> Arc<Self> {
-        let common = new_file_common(fs, mode, is_volatile);
+    pub fn new(file: F, parent: Weak<dyn Inode>, mode: InodeMode) -> Arc<Self> {
+        let common = {
+            let fs = parent.upgrade().unwrap().fs();
+            let procfs = fs.downcast_ref::<ProcFs>().unwrap();
+            let metadata = Metadata::new_file(
+                procfs.alloc_id(),
+                mode,
+                BLOCK_SIZE,
+                procfs.sb().container_dev_id,
+            );
+            Common::new(metadata, Arc::downgrade(&fs))
+        };
         Arc::new(Self {
             inner: file,
             common,
@@ -39,18 +46,6 @@ impl<F: FileOps> ProcFile<F> {
     pub fn inner(&self) -> &F {
         &self.inner
     }
-}
-
-fn new_file_common(fs: Weak<dyn FileSystem>, mode: InodeMode, is_volatile: bool) -> Common {
-    let fs_ref = fs.upgrade().unwrap();
-    let procfs = fs_ref.downcast_ref::<super::ProcFs>().unwrap();
-    let metadata = Metadata::new_file(
-        procfs.alloc_id(),
-        mode,
-        super::BLOCK_SIZE,
-        procfs.sb().container_dev_id,
-    );
-    Common::new(metadata, fs, is_volatile)
 }
 
 impl<F: FileOps + 'static> InodeIo for ProcFile<F> {
@@ -76,7 +71,6 @@ impl<F: FileOps + 'static> InodeIo for ProcFile<F> {
 #[inherit_methods(from = "self.common")]
 impl<F: FileOps + 'static> Inode for ProcFile<F> {
     fn size(&self) -> usize;
-    fn metadata(&self) -> Metadata;
     fn extension(&self) -> &Extension;
     fn ino(&self) -> u64;
     fn mode(&self) -> Result<InodeMode>;
@@ -92,6 +86,11 @@ impl<F: FileOps + 'static> Inode for ProcFile<F> {
     fn ctime(&self) -> Duration;
     fn set_ctime(&self, time: Duration);
     fn fs(&self) -> Arc<dyn FileSystem>;
+
+    fn metadata(&self) -> Metadata {
+        let owner_thread = self.inner.owner_thread();
+        self.common.metadata_with_owner(owner_thread)
+    }
 
     fn resize(&self, _new_size: usize) -> Result<()> {
         // Resizing files under `/proc` will succeed, but will do nothing.
@@ -110,10 +109,6 @@ impl<F: FileOps + 'static> Inode for ProcFile<F> {
         Err(Error::new(Errno::EINVAL))
     }
 
-    fn is_dentry_cacheable(&self) -> bool {
-        !self.common.is_volatile()
-    }
-
     fn seek_end(&self) -> Option<usize> {
         // Seeking regular files under `/proc` with `SEEK_END` will fail.
         None
@@ -129,6 +124,11 @@ impl<F: FileOps + 'static> Inode for ProcFile<F> {
 }
 
 pub trait FileOps: Sync + Send {
+    /// Returns the thread whose credentials own this procfs inode.
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        None
+    }
+
     fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize>;
 
     fn write_at(&self, _offset: usize, _reader: &mut VmReader) -> Result<usize> {
@@ -145,10 +145,19 @@ pub trait FileOps: Sync + Send {
 }
 
 pub trait FileOpsByHandle: Sync + Send {
+    /// Returns the thread whose credentials own this procfs inode.
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        None
+    }
+
     fn open(&self, access_mode: AccessMode, status_flags: StatusFlags) -> Result<Box<dyn FileIo>>;
 }
 
 impl<T: FileOpsByHandle> FileOps for T {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        FileOpsByHandle::owner_thread(self)
+    }
+
     fn read_at(&self, _offset: usize, _writer: &mut VmWriter) -> Result<usize> {
         unreachable!("`read_at` is never called when `open` returns `Some(_)`")
     }

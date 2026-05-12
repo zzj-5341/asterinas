@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use aster_util::slot_vec::SlotVec;
-use ostd::sync::RwMutexUpgradeableGuard;
-
 use self::kernel::KernelDirOps;
-use super::template::populate_children_from_table;
+use super::template::{
+    ReaddirEntry, StaticDirEntry, listed_entries_from_table, visit_listed_entries,
+};
 use crate::{
     fs::{
-        file::mkmod,
-        procfs::template::{DirOps, ProcDir, ProcDirBuilder, lookup_child_from_table},
+        file::{InodeType, mkmod},
+        procfs::template::{DirOps, ProcDir, lookup_child_from_table},
         vfs::inode::Inode,
     },
     prelude::*,
@@ -24,42 +23,33 @@ impl SysDirOps {
         // Reference:
         // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/proc_sysctl.c#L1566>
         // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/generic.c#L488-L489>
-        ProcDirBuilder::new(Self, mkmod!(a+rx))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcDir::new(Self, parent, mkmod!(a+rx))
     }
 
     #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
-        &[("kernel", KernelDirOps::new_inode)];
+    const STATIC_ENTRIES: &'static [StaticDirEntry<fn(Weak<dyn Inode>) -> Arc<dyn Inode>>] =
+        &[("kernel", InodeType::Dir, KernelDirOps::new_inode)];
 }
 
 impl DirOps for SysDirOps {
-    fn lookup_child(&self, dir: &ProcDir<Self>, name: &str) -> Result<Arc<dyn Inode>> {
-        let mut cached_children = dir.cached_children().write();
-
-        if let Some(child) =
-            lookup_child_from_table(name, &mut cached_children, Self::STATIC_ENTRIES, |f| {
-                (f)(dir.this_weak().clone())
-            })
-        {
+    fn lookup_child(&self, this_dir: &ProcDir<Self>, name: &str) -> Result<Arc<dyn Inode>> {
+        if let Some(child) = lookup_child_from_table(name, Self::STATIC_ENTRIES, |f| {
+            (f)(this_dir.this_weak().clone())
+        }) {
             return Ok(child);
         }
 
         return_errno_with_message!(Errno::ENOENT, "the file does not exist");
     }
 
-    fn populate_children<'a>(
-        &self,
-        dir: &'a ProcDir<Self>,
-    ) -> RwMutexUpgradeableGuard<'a, SlotVec<(String, Arc<dyn Inode>)>> {
-        let mut cached_children = dir.cached_children().write();
-
-        populate_children_from_table(&mut cached_children, Self::STATIC_ENTRIES, |f| {
-            (f)(dir.this_weak().clone())
-        });
-
-        cached_children.downgrade()
+    fn visit_entries_from_offset<'a, F>(&'a self, offset: usize, visit_fn: F) -> Result<()>
+    where
+        F: FnMut(ReaddirEntry<'a>) -> Result<()>,
+    {
+        visit_listed_entries(
+            offset,
+            listed_entries_from_table(Self::STATIC_ENTRIES),
+            visit_fn,
+        )
     }
 }

@@ -88,6 +88,7 @@ test_mount_bind_file() {
 echo "Start ext2 fs test......"
 test_ext2 "/ext2" "test_file.txt"
 ./ext2/mknod
+./ext2/open_dir
 ./ext2/rename
 ./ext2/rmdir
 ./ext2/unix_socket
@@ -114,8 +115,11 @@ echo "All mount bind file test passed."
 ./overlayfs/readdir_small_buffer
 
 ./procfs/dentry_cache
+./procfs/fd
+./procfs/getdents
 ./procfs/mountstats
 ./procfs/pid_mem
+./procfs/proc_fd_open_fifo_after_setid
 ./procfs/tid
 
 ./pseudofs/memfd_access_err
@@ -125,3 +129,5 @@ echo "All mount bind file test passed."
 ./pseudofs/pseudo_mount
 
 ./symlink/symlink
+
+./utimensat/utimensat

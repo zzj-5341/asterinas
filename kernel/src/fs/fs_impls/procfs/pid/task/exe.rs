@@ -4,32 +4,36 @@ use super::TidDirOps;
 use crate::{
     fs::{
         file::mkmod,
-        procfs::template::{ProcSymBuilder, SymOps},
+        procfs::template::{ProcSym, SymOps},
         vfs::inode::{Inode, SymbolicLink},
     },
     prelude::*,
-    process::Process,
+    thread::Thread,
 };
 
 /// Represents the inode at `/proc/[pid]/task/[tid]/exe` (and also `/proc/[pid]/exe`).
-pub struct ExeSymOps(Arc<Process>);
+pub struct ExeSymOps(TidDirOps);
 
 impl ExeSymOps {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        let process_ref = dir.process_ref.clone();
         // Reference:
         // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/base.c#L3350>
         // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/base.c#L174-L175>
-        ProcSymBuilder::new(Self(process_ref), mkmod!(a+rwx))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcSym::new(Self(dir.clone()), parent, mkmod!(a+rwx))
     }
 }
 
 impl SymOps for ExeSymOps {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        self.0.thread()
+    }
+
     fn read_link(&self) -> Result<SymbolicLink> {
-        let vmar_guard = self.0.lock_vmar();
+        let Some(process) = self.0.process() else {
+            return_errno_with_message!(Errno::ESRCH, "the process does not exist");
+        };
+
+        let vmar_guard = process.lock_vmar();
         let Some(vmar) = vmar_guard.as_ref() else {
             return_errno_with_message!(Errno::ENOENT, "the process has exited");
         };

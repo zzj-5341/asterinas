@@ -4,30 +4,34 @@ use super::TidDirOps;
 use crate::{
     fs::{
         file::mkmod,
-        procfs::template::{FileOps, ProcFileBuilder},
+        procfs::template::{FileOps, ProcFile},
         vfs::inode::Inode,
     },
     prelude::*,
-    process::Process,
+    thread::Thread,
 };
 
 /// Represents the inode at `/proc/[pid]/task/[tid]/auxv` (and also `/proc/[pid]/auxv`).
-pub struct AuxvFileOps(Arc<Process>);
+pub struct AuxvFileOps(TidDirOps);
 
 impl AuxvFileOps {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        let process_ref = dir.process_ref.clone();
         // Reference: <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/base.c#L3325>
-        ProcFileBuilder::new(Self(process_ref), mkmod!(u+r))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcFile::new(Self(dir.clone()), parent, mkmod!(u+r))
     }
 }
 
 impl FileOps for AuxvFileOps {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        self.0.thread()
+    }
+
     fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
-        let vmar_guard = self.0.lock_vmar();
+        let Some(process) = self.0.process() else {
+            return_errno_with_message!(Errno::ESRCH, "the process does not exist");
+        };
+
+        let vmar_guard = process.lock_vmar();
         let Some(init_stack_reader) = vmar_guard.init_stack_reader() else {
             // According to Linux behavior, return an empty file
             // if the process is a zombie process.

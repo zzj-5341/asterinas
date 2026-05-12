@@ -3,8 +3,6 @@
 //! The virtio of Asterinas.
 #![no_std]
 #![deny(unsafe_code)]
-#![feature(linked_list_cursors)]
-#![feature(trait_alias)]
 
 extern crate alloc;
 #[macro_use]
@@ -18,7 +16,8 @@ use bitflags::bitflags;
 use component::{ComponentInitError, init_component};
 use device::{
     VirtioDeviceType, block::device::BlockDevice, console::device::ConsoleDevice,
-    input::device::InputDevice, network::device::NetworkDevice, socket::device::SocketDevice,
+    entropy::device::EntropyDevice, input::device::InputDevice, network::device::NetworkDevice,
+    socket::device::SocketDevice,
 };
 use ostd::{error, warn};
 use spin::Once;
@@ -36,7 +35,7 @@ macro_rules! __log_prefix {
 pub mod device;
 mod dma_buf;
 mod id_alloc;
-pub mod queue;
+mod queue;
 mod transport;
 
 static VIRTIO_BLOCK_MAJOR_ID: Once<MajorIdOwner> = Once::new();
@@ -48,6 +47,7 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
     // Find all devices and register them to the corresponding crate
     transport::init();
 
+    device::entropy::init();
     device::network::init();
     device::socket::init();
 
@@ -77,18 +77,19 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
         let device_type = transport.device_type();
         let res = match transport.device_type() {
             VirtioDeviceType::Block => BlockDevice::init(transport),
+            VirtioDeviceType::Console => ConsoleDevice::init(transport),
+            VirtioDeviceType::Entropy => EntropyDevice::init(transport),
             VirtioDeviceType::Input => InputDevice::init(transport),
             VirtioDeviceType::Network => NetworkDevice::init(transport),
-            VirtioDeviceType::Console => ConsoleDevice::init(transport),
             VirtioDeviceType::Socket => SocketDevice::init(transport),
             _ => {
-                warn!("Found unimplemented device:{:?}", device_type);
+                warn!("Found unimplemented device: {:?}", device_type);
                 Ok(())
             }
         };
         if res.is_err() {
             error!(
-                "Device initialization error:{:?}, device type:{:?}",
+                "Device initialization error: {:?}, device type: {:?}",
                 res, device_type
             );
         }

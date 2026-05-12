@@ -33,13 +33,15 @@ update_dep_version() {
     sed -i "0,/${pattern}/s/${pattern}/$2 = { version = \"${new_version}\"/1" $1
 }
 
-# Update Docker image versions (`asterinas/asterinas:{version}`) in file $1
+# Update Docker image versions in file $1
 update_image_versions() {
     echo "Updating file $1"
-    # Update the version of the development container
+    # Update the version of the Asterinas development container
     sed -i "s/asterinas\/asterinas:[[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\(-[[:digit:]]\+\)\?/asterinas\/asterinas:${new_version}/g" $1
-    # Update the test environment described in the OSDK manual
+    # Update the version of asterinas/osdk container
     sed -i "s/asterinas\/osdk:[[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\(-[[:digit:]]\+\)\?/asterinas\/osdk:${new_version}/g" $1
+    # Update the version of asterinas/kata container
+    sed -i "s/asterinas\/kata:[[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\(-[[:digit:]]\+\)\?/asterinas\/kata:${new_version}/g" $1
 }
 
 # Print the help message
@@ -125,8 +127,9 @@ update_all_docker_version_refs() {
     update_image_versions ${SCRIPT_DIR}/docker/README.md
 
     # Update Docker image versions in the Book
-    update_image_versions ${BOOK_DIR}/src/kernel/README.md
     update_image_versions ${BOOK_DIR}/src/kernel/intel-tdx.md
+    update_image_versions ${BOOK_DIR}/src/kernel/README.md
+    update_image_versions ${BOOK_DIR}/src/kernel/vm-based-containers/kata.md
     update_image_versions ${BOOK_DIR}/src/osdk/guide/intel-tdx.md
 
     # Update Docker image versions in workflows
@@ -160,6 +163,7 @@ update_project_dependencies() {
     # Automatically bump Cargo.lock files
     cargo update -p aster-kernel --precise $new_version # For Cargo.lock
     cd ${OSDK_DIR} && cargo update -p cargo-osdk --precise $new_version # For osdk/Cargo.lock
+    cd ${SCTRACE_DIR} && cargo update -p sctrace --precise $new_version # For tools/sctrace/Cargo.lock
 }
 
 # Synchronize project version to Docker version (update VERSION)
@@ -196,7 +200,8 @@ BOOK_DIR=${ASTER_SRC_DIR}/book
 WORKSPACE_CARGO_TOML_PATH=${ASTER_SRC_DIR}/Cargo.toml
 OSDK_DIR=${ASTER_SRC_DIR}/osdk
 OSDK_CARGO_TOML_PATH=${OSDK_DIR}/Cargo.toml
-SCTRACE_CARGO_TOML_PATH=${ASTER_SRC_DIR}/tools/sctrace/Cargo.toml
+SCTRACE_DIR=${ASTER_SRC_DIR}/tools/sctrace
+SCTRACE_CARGO_TOML_PATH=${SCTRACE_DIR}/Cargo.toml
 VERSION_PATH=${ASTER_SRC_DIR}/VERSION
 DOCKER_IMAGE_VERSION_PATH=${ASTER_SRC_DIR}/DOCKER_IMAGE_VERSION
 

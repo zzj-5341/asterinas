@@ -16,6 +16,7 @@ initramfs/
 │   ├── benchmark/     # Third-party benchmark suites to compare Asterinas against Linux
 │   ├── conformance/   # Third-party test suites to verify Linux compatibility
 │   │   ├── gvisor/    # Gvisor syscall test suite
+│   │   ├── kselftest/ # Linux kernel in-tree selftests
 │   │   └── ltp/       # Linux Test Project syscall test suite
 │   ├── regression/    # In-house syscall and subsystem regression tests
 │   └── boot_hello.sh  # Minimal boot smoke test script
@@ -33,14 +34,38 @@ Most tests in this directory are compiled and packaged using [Nix](https://nixos
 
 While most tests rely on `Nix` for compilation, the `gvisor` conformance test suite currently cannot be built with `Nix`. Instead, the `gvisor` tests are compiled in the Docker image. For details, refer to `tools/docker/Dockerfile`.
 
+### Linux Kernel Selftest (kselftest)
+
+The `kselftest` suite builds a subset of Linux's in-tree selftests
+(`tools/testing/selftests`) from the Linux version pinned in
+`nix/conformance/kselftest.nix` (currently **v6.18**). Only the
+subsystems listed in `baseKselftestTargets` are compiled, plus `x86`
+on x86_64 hosts.
+
+Invoke via:
+
+```bash
+make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=kselftest
+```
+
+**Bumping the Linux version.** Edit `version` in
+`nix/conformance/kselftest.nix`, temporarily set `hash = lib.fakeHash;`,
+run the Nix build once, and copy the real hash reported by `fetchgit`
+back into `hash`.
+
+**Blocklist layout.** `src/conformance/kselftest/blocklists` is the
+default blocklist; `blocklists.ext2` and `blocklists.exfat` hold
+filesystem-specific extras. See the header of `blocklists` for the
+entry format.
+
 ### Multi-Architecture Support
 
 The test suite supports building for multiple architectures, including `x86_64` and `riscv64`. You can specify the desired architecture by running:
 
 ```bash
-make kernel OSDK_TARGET_ARCH=x86_64
+make kernel TARGET_ARCH=x86_64
 # or
-make kernel OSDK_TARGET_ARCH=riscv64
+make kernel TARGET_ARCH=riscv64
 ```
 
 The build artifacts (initramfs) can be found in the `test/initramfs/build` directory after the compilation.

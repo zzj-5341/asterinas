@@ -3,7 +3,7 @@
 # =========================== Makefile options. ===============================
 
 # Global build options.
-OSDK_TARGET_ARCH ?= x86_64
+TARGET_ARCH ?= x86_64
 BENCHMARK ?= none
 BOOT_METHOD ?= grub-rescue-iso
 BOOT_PROTOCOL ?= multiboot2
@@ -46,7 +46,12 @@ AUTO_TEST ?= none
 ENABLE_CONFORMANCE_TEST ?= false
 CONFORMANCE_TEST_SUITE ?= ltp
 CONFORMANCE_TEST_WORKDIR ?= /tmp
-EXTRA_BLOCKLISTS_DIRS ?= ""
+# Whitespace-separated extra blocklist paths for conformance runners.
+# - `gvisor` treats each entry as a directory relative to its runner directory,
+#   and loads a per-test blocklist file from that directory.
+# - `kselftest` treats each entry as a blocklist file relative to its runner
+#   directory, and appends that file directly.
+EXTRA_BLOCKLISTS ?= ""
 # Specify whether to build regression tests under `test/initramfs/src/regression`.
 ENABLE_REGRESSION_TEST ?= false
 # End of auto test features.
@@ -83,12 +88,14 @@ DEV_TRUSTED_PUBLIC_KEY ?= aster-nixos-dev.cachix.org-1:xrCbE2flfliFTQCY/2HeJoT2t
 
 # ========================= End of Makefile options. ==========================
 
+export OSDK_TARGET_ARCH=$(TARGET_ARCH)
+
 SHELL := /bin/bash
 
 CARGO_OSDK := ~/.cargo/bin/cargo-osdk
 
 # Common arguments for `cargo osdk` `build`, `run` and `test` commands.
-CARGO_OSDK_COMMON_ARGS := --target-arch=$(OSDK_TARGET_ARCH)
+CARGO_OSDK_COMMON_ARGS :=
 # The build arguments also apply to the `cargo osdk run` command.
 CARGO_OSDK_BUILD_ARGS := --kcmd-args="ostd.log_level=$(LOG_LEVEL)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="console=$(CONSOLE)"
@@ -98,7 +105,7 @@ ifeq ($(AUTO_TEST), conformance)
 ENABLE_CONFORMANCE_TEST := true
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="CONFORMANCE_TEST_SUITE=$(CONFORMANCE_TEST_SUITE)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="CONFORMANCE_TEST_WORKDIR=$(CONFORMANCE_TEST_WORKDIR)"
-CARGO_OSDK_BUILD_ARGS += --kcmd-args="EXTRA_BLOCKLISTS_DIRS=$(EXTRA_BLOCKLISTS_DIRS)"
+CARGO_OSDK_BUILD_ARGS += --kcmd-args="EXTRA_BLOCKLISTS=$(EXTRA_BLOCKLISTS)"
 CARGO_OSDK_BUILD_ARGS += --init-args="/opt/run_conformance_test.sh"
 else ifeq ($(AUTO_TEST), regression)
 ENABLE_REGRESSION_TEST := true
@@ -117,7 +124,7 @@ CARGO_OSDK_COMMON_ARGS += --profile release-lto
 OSTD_TASK_STACK_SIZE_IN_PAGES = 8
 else ifeq ($(RELEASE), 1)
 CARGO_OSDK_COMMON_ARGS += --release
-	ifeq ($(OSDK_TARGET_ARCH), riscv64)
+	ifeq ($(TARGET_ARCH), riscv64)
 	# FIXME: Unwinding in RISC-V seems to cost more stack space, so we increase
 	# the stack size for it. This may need further investigation.
 	# See https://github.com/asterinas/asterinas/pull/2383#discussion_r2307673156
@@ -146,9 +153,9 @@ BOOT_METHOD = qemu-direct
 endif
 
 ifeq ($(SCHEME), "")
-	ifeq ($(OSDK_TARGET_ARCH), riscv64)
+	ifeq ($(TARGET_ARCH), riscv64)
 	SCHEME = riscv
-	else ifeq ($(OSDK_TARGET_ARCH), loongarch64)
+	else ifeq ($(TARGET_ARCH), loongarch64)
 	SCHEME = loongarch
 	endif
 endif
@@ -183,7 +190,7 @@ CARGO_OSDK_COMMON_ARGS += --grub-boot-protocol=$(BOOT_PROTOCOL)
 endif
 
 ifeq ($(ENABLE_KVM), 1)
-	ifeq ($(OSDK_TARGET_ARCH), x86_64)
+	ifeq ($(TARGET_ARCH), x86_64)
 	CARGO_OSDK_COMMON_ARGS += --qemu-args="-accel kvm"
 	endif
 endif
@@ -199,59 +206,6 @@ CARGO_OSDK_TEST_ARGS += $(CARGO_OSDK_COMMON_ARGS)
 
 # Pass make variables to all subdirectory makes
 export
-
-# Basically, non-OSDK crates do not depend on Aster Frame and can be checked
-# or tested without OSDK.
-NON_OSDK_CRATES := \
-	ostd/libs/align_ext \
-	ostd/libs/id-alloc \
-	ostd/libs/int-to-c-enum \
-	ostd/libs/int-to-c-enum/derive \
-	ostd/libs/linux-bzimage/boot-params \
-	ostd/libs/linux-bzimage/builder \
-	ostd/libs/ostd-macros \
-	ostd/libs/ostd-pod \
-	ostd/libs/ostd-pod/macros \
-	ostd/libs/ostd-test \
-	ostd/libs/padding-struct \
-	kernel/libs/aster-rights \
-	kernel/libs/aster-rights-proc \
-	kernel/libs/atomic-integer-wrapper \
-	kernel/libs/cpio-decoder \
-	kernel/libs/jhash \
-	kernel/libs/keyable-arc \
-	kernel/libs/logo-ascii-art \
-	kernel/libs/typeflags \
-	kernel/libs/typeflags-util
-
-# In contrast, OSDK crates depend on OSTD (or being `ostd` itself)
-# and need to be built or tested with OSDK.
-OSDK_CRATES := \
-	osdk/deps/frame-allocator \
-	osdk/deps/heap-allocator \
-	osdk/deps/test-kernel \
-	ostd \
-	ostd/libs/linux-bzimage/setup \
-	kernel \
-	kernel/comps/block \
-	kernel/comps/cmdline \
-	kernel/comps/console \
-	kernel/comps/framebuffer \
-	kernel/comps/i8042 \
-	kernel/comps/input \
-	kernel/comps/logger \
-	kernel/comps/mlsdisk \
-	kernel/comps/network \
-	kernel/comps/pci \
-	kernel/comps/softirq \
-	kernel/comps/systree \
-	kernel/comps/time \
-	kernel/comps/uart \
-	kernel/comps/virtio \
-	kernel/libs/aster-bigtcp \
-	kernel/libs/aster-util \
-	kernel/libs/device-id \
-	kernel/libs/xarray
 
 # OSDK dependencies
 OSDK_SRC_FILES := \
@@ -275,9 +229,7 @@ $(CARGO_OSDK): $(OSDK_SRC_FILES)
 
 .PHONY: check_osdk
 check_osdk:
-	@# Run clippy on OSDK with and without the test configuration.
-	@cd osdk && RUSTFLAGS="-Dwarnings" cargo clippy --no-deps
-	@cd osdk && RUSTFLAGS="-Dwarnings" cargo clippy --tests --no-deps
+	@./tools/clippy_check.sh osdk
 
 .PHONY: test_osdk
 test_osdk:
@@ -394,35 +346,46 @@ profile_client: initramfs $(CARGO_OSDK)
 		--samples $(GDB_PROFILE_COUNT) --interval $(GDB_PROFILE_INTERVAL) --format $(GDB_PROFILE_FORMAT)
 
 .PHONY: test
+test: NON_DEFAULT_PACKAGE_NAMES = \
+    $(shell ./tools/print_workspace_members.sh --non-default-ones --package-names)
+test: TEST_PACKAGE_NAMES = \
+    $(filter-out linux-bzimage-setup,$(NON_DEFAULT_PACKAGE_NAMES))
 test:
-	@for dir in $(NON_OSDK_CRATES); do \
-		(cd $$dir && cargo test) || exit 1; \
-	done
+	@if [ -n "$(TEST_PACKAGE_NAMES)" ]; then \
+		cargo test $(addprefix -p ,$(TEST_PACKAGE_NAMES)); \
+	fi
 
 .PHONY: ktest
 ktest: CONSOLE = ttyS0
 ktest: initramfs $(CARGO_OSDK)
-	@# linux-bzimage-setup is excluded from ktest since it's hard to be unit tested.
-	@CRATES=$$(echo $(filter-out ostd/libs/linux-bzimage/setup,$(OSDK_CRATES)) | tr ' ' ','); \
-	./tools/run_ktest.sh \
-        --crates "$$CRATES" \
-        -- $(CARGO_OSDK_TEST_ARGS)
+	@# cargo-osdk tests default workspace members.
+	@# `linux-bzimage-setup` is left out of `default-members`
+	@# because it is hard to unit test.
+	@cargo osdk test $(CARGO_OSDK_TEST_ARGS)
 
 .PHONY: docs
+docs: private DEFAULT_PACKAGE_NAMES = \
+    $(shell ./tools/print_workspace_members.sh --default-ones --package-names)
+docs: private DEFAULT_NON_KERNEL_PACKAGE_NAMES = \
+    $(filter-out aster-kernel,$(DEFAULT_PACKAGE_NAMES))
+docs: private NON_DEFAULT_PACKAGE_NAMES = \
+    $(shell ./tools/print_workspace_members.sh --non-default-ones --package-names)
+docs: private DOC_NON_DEFAULT_PACKAGE_NAMES = \
+    $(filter-out linux-bzimage-setup,$(NON_DEFAULT_PACKAGE_NAMES))
 docs: $(CARGO_OSDK)
-	@for dir in $(NON_OSDK_CRATES); do \
-		(cd $$dir && RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps) || exit 1; \
-	done
-	@for dir in $(OSDK_CRATES); do \
-		EXTRA_DOC_FLAGS=""; \
-		# The kernel crate is primarily composed of private items. \
-		# We include the --document-private-items flag \
-		# to ensure documentation of the internal items is fully checked. \
-		if [ "$$dir" = "kernel" ]; then \
-			EXTRA_DOC_FLAGS="--document-private-items -Arustdoc::private_intra_doc_links"; \
-		fi; \
-		(cd $$dir && RUSTDOCFLAGS="-Dwarnings $$EXTRA_DOC_FLAGS" cargo osdk doc --no-deps) || exit 1; \
-	done
+	@if [ -n "$(DEFAULT_NON_KERNEL_PACKAGE_NAMES)" ]; then \
+		RUSTDOCFLAGS="-Dwarnings" cargo osdk doc $(addprefix -p ,$(DEFAULT_NON_KERNEL_PACKAGE_NAMES)) --no-deps; \
+	fi
+	@if [ -n "$(DOC_NON_DEFAULT_PACKAGE_NAMES)" ]; then \
+		RUSTDOCFLAGS="-Dwarnings" cargo doc $(addprefix -p ,$(DOC_NON_DEFAULT_PACKAGE_NAMES)) --no-deps; \
+	fi
+	@# The kernel crate is primarily composed of private items.
+	@# Include --document-private-items to fully check internal documentation.
+	@RUSTDOCFLAGS="-Dwarnings --document-private-items -Arustdoc::private_intra_doc_links" \
+		cargo osdk doc -p aster-kernel --no-deps
+	@if [ "$(TARGET_ARCH)" = "x86_64" ]; then \
+		cd ostd/libs/linux-bzimage/setup && RUSTDOCFLAGS="-Dwarnings" cargo osdk doc --no-deps; \
+	fi
 
 .PHONY: book
 book: book/mermaid.min.js book/mermaid-init.js
@@ -439,45 +402,22 @@ format:
 	@$(MAKE) --no-print-directory -C test/nixos format
 
 .PHONY: check
-check: initramfs $(CARGO_OSDK)
+check: private WORKSPACE_MEMBER_DIRS = \
+    $(shell ./tools/print_workspace_members.sh)
+check: $(CARGO_OSDK)
 	@# Check formatting issues of the Rust code
 	@./tools/format_all.sh --check
 	@
-	@# Check if the combination of STD_CRATES and NON_OSDK_CRATES is the
-	@# same as all workspace members
-	@sed -n '/^\[workspace\]/,/^\[.*\]/{/members = \[/,/\]/p}' Cargo.toml | \
-		grep -v "members = \[" | tr -d '", \]' | \
-		sort > /tmp/all_crates
-	@echo $(NON_OSDK_CRATES) $(OSDK_CRATES) | tr ' ' '\n' | sort > /tmp/combined_crates
-	@diff -B /tmp/all_crates /tmp/combined_crates || \
-		(echo "Error: The combination of STD_CRATES and NOSTD_CRATES" \
-			"is not the same as all workspace members" && exit 1)
-	@rm /tmp/all_crates /tmp/combined_crates
-	@
 	@# Check if all workspace members enable workspace lints
-	@for dir in $(NON_OSDK_CRATES) $(OSDK_CRATES); do \
+	@for dir in $(WORKSPACE_MEMBER_DIRS); do \
 		if [[ "$$(tail -2 $$dir/Cargo.toml)" != "[lints]"$$'\n'"workspace = true" ]]; then \
 			echo "Error: Workspace lints in $$dir are not enabled"; \
 			exit 1; \
-		fi \
+		fi; \
 	done
 	@
 	@# Check compilation of the Rust code
-	@for dir in $(NON_OSDK_CRATES); do \
-		echo "Checking $$dir"; \
-		# Run clippy on each crate with and without the test configuration. \
-		(cd $$dir && RUSTFLAGS="-Dwarnings" cargo clippy --no-deps) || exit 1; \
-		(cd $$dir && RUSTFLAGS="-Dwarnings" cargo clippy --tests --no-deps) || exit 1; \
-	done
-	@for dir in $(OSDK_CRATES); do \
-		echo "Checking $$dir"; \
-		# Exclude linux-bzimage-setup since it only supports x86-64 currently and will panic \
-		# in other architectures. \
-		[ "$$dir" = "ostd/libs/linux-bzimage/setup" ] && [ "$(OSDK_TARGET_ARCH)" != "x86_64" ] && continue; \
-		# Run clippy on each crate with and without the ktest configuration. \
-		(cd $$dir && RUSTFLAGS="-Dwarnings" cargo osdk clippy -- --no-deps) || exit 1; \
-		(cd $$dir && RUSTFLAGS="-Dwarnings" cargo osdk clippy --ktests -- --no-deps) || exit 1; \
-	done
+	@./tools/clippy_check.sh workspace
 	@
 	@# Check formatting issues of the C code and Nix files (regression tests)
 	@$(MAKE) --no-print-directory -C test/initramfs check

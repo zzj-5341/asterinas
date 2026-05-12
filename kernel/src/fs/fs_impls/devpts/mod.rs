@@ -16,9 +16,9 @@ use crate::{
         pseudofs::AnonDeviceId,
         utils::{DirEntryVecExt, DirentVisitor, NAME_MAX},
         vfs::{
-            file_system::{FileSystem, FsEventSubscriberStats, FsFlags, SuperBlock},
-            inode::{Extension, Inode, InodeIo, Metadata, MknodType},
-            registry::{FsProperties, FsType},
+            file_system::{FileSystem, FsEventSubscriberStats, SuperBlock},
+            inode::{Extension, Inode, InodeIo, Metadata, MknodType, RevalidationPolicy},
+            registry::{FsCreationCtx, FsProperties, FsType},
         },
     },
     prelude::*,
@@ -133,12 +133,7 @@ impl FsType for DevPtsType {
         FsProperties::empty()
     }
 
-    fn create(
-        &self,
-        _flags: FsFlags,
-        _args: Option<CString>,
-        _disk: Option<Arc<dyn aster_block::BlockDevice>>,
-    ) -> Result<Arc<dyn FileSystem>> {
+    fn create(&self, _fs_creation_ctx: &FsCreationCtx) -> Result<Arc<dyn FileSystem>> {
         Ok(DevPts::new())
     }
 
@@ -363,7 +358,22 @@ impl Inode for RootInode {
         self.fs.upgrade().unwrap()
     }
 
-    fn is_dentry_cacheable(&self) -> bool {
+    fn revalidation_policy(&self) -> RevalidationPolicy {
+        RevalidationPolicy::REVALIDATE_EXISTS | RevalidationPolicy::REVALIDATE_ABSENT
+    }
+
+    fn revalidate_exists(&self, _name: &str, _child: &dyn Inode) -> bool {
+        // Slave entries are created by opening `ptmx` and removed when the
+        // master is dropped, bypassing VFS dentry updates. Always retry lookup
+        // so a cached dentry cannot refer to a removed or reused pty index.
+        //
+        // TODO: Add a devpts-to-VFS dentry invalidation/update path for slave
+        // add/remove, similar to Linux devpts dropping slave dentries on pty
+        // teardown. Then this conservative revalidation can be relaxed.
+        false
+    }
+
+    fn revalidate_absent(&self, _name: &str) -> bool {
         false
     }
 }
