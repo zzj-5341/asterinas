@@ -18,11 +18,14 @@ use crate::{
         vfs::inode::Inode,
     },
     prelude::*,
+    security::lsm::is_yama_enabled,
 };
 
 mod cap_last_cap;
 mod pid_max;
 mod yama;
+
+type StaticEntry = (&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>);
 
 /// Represents the inode at `/proc/sys/kernel`.
 pub struct KernelDirOps;
@@ -38,12 +41,24 @@ impl KernelDirOps {
             .unwrap()
     }
 
-    #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] = &[
+    const STATIC_ENTRIES: &'static [StaticEntry] = &[
+        ("cap_last_cap", CapLastCapFileOps::new_inode),
+        ("pid_max", PidMaxFileOps::new_inode),
+    ];
+
+    const STATIC_ENTRIES_WITH_YAMA: &'static [StaticEntry] = &[
         ("cap_last_cap", CapLastCapFileOps::new_inode),
         ("pid_max", PidMaxFileOps::new_inode),
         ("yama", YamaDirOps::new_inode),
     ];
+
+    fn static_entries() -> &'static [StaticEntry] {
+        if is_yama_enabled() {
+            Self::STATIC_ENTRIES_WITH_YAMA
+        } else {
+            Self::STATIC_ENTRIES
+        }
+    }
 }
 
 impl DirOps for KernelDirOps {
@@ -51,7 +66,7 @@ impl DirOps for KernelDirOps {
         let mut cached_children = dir.cached_children().write();
 
         if let Some(child) =
-            lookup_child_from_table(name, &mut cached_children, Self::STATIC_ENTRIES, |f| {
+            lookup_child_from_table(name, &mut cached_children, Self::static_entries(), |f| {
                 (f)(dir.this_weak().clone())
             })
         {
@@ -67,7 +82,7 @@ impl DirOps for KernelDirOps {
     ) -> RwMutexUpgradeableGuard<'a, SlotVec<(String, Arc<dyn Inode>)>> {
         let mut cached_children = dir.cached_children().write();
 
-        populate_children_from_table(&mut cached_children, Self::STATIC_ENTRIES, |f| {
+        populate_children_from_table(&mut cached_children, Self::static_entries(), |f| {
             (f)(dir.this_weak().clone())
         });
 
