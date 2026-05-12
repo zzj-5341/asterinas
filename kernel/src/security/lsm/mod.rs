@@ -7,7 +7,8 @@
 //! inspect common hook contexts before allowing or rejecting an operation.
 //!
 //! This module defines the common LSM traits, ptrace hook contexts, and
-//! dispatch helpers shared by built-in modules such as `yama`.
+//! dispatch helpers shared by built-in modules such as `yama`. Module selection
+//! follows the `lsm=` and legacy `security=` kernel command-line parameters.
 
 mod checks;
 mod modules;
@@ -38,6 +39,14 @@ impl LsmKind {
     }
 }
 
+bitflags! {
+    /// LSM module flags.
+    pub struct LsmFlags: u32 {
+        /// Marks a module as mutually exclusive with other exclusive modules.
+        const EXCLUSIVE = 1 << 0;
+    }
+}
+
 /// Defines the common interface for built-in LSM modules.
 pub trait LsmModule: LsmPtraceCheck + Sync {
     /// Returns the module name.
@@ -46,17 +55,18 @@ pub trait LsmModule: LsmPtraceCheck + Sync {
     /// Returns the module kind.
     fn kind(&self) -> LsmKind;
 
-    /// Initializes the module during boot.
-    fn init(&self);
+    /// Returns the module flags.
+    fn flags(&self) -> LsmFlags;
 }
 
 pub(super) fn init() {
+    modules::init();
+
     for module in modules::active_modules() {
         info!(
             "[kernel] LSM module enabled: {} ({})",
             module.name(),
             module.kind().as_str()
         );
-        module.init();
     }
 }
