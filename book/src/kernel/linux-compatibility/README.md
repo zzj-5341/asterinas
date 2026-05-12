@@ -12,7 +12,7 @@ it is important to note that Asterinas does not,
 nor will it in the future,
 support the loading of Linux kernel modules.
 
-## System Calls
+## System calls
 
 At the time of writing,
 Asterinas supports over 230 Linux system calls for the x86-64 architecture,
@@ -121,7 +121,7 @@ which are summarized in the table below.
 | 98      | getrusage              | ✅             | [⚠️](syscall-flag-coverage/system-information-and-misc/#getrusage) |
 | 99      | sysinfo                | ✅             | 💯 |
 | 100     | times                  | ❌             | N/A |
-| 101     | ptrace                 | ❌             | N/A |
+| 101     | ptrace                 | ✅             | [⚠️](syscall-flag-coverage/process-and-thread-management/#ptrace) |
 | 102     | getuid                 | ✅             | 💯 |
 | 103     | syslog                 | ❌             | N/A |
 | 104     | getgid                 | ✅             | 💯 |
@@ -365,7 +365,7 @@ which are summarized in the table below.
 Most of these system calls (or their variants) are also supported
 for the RISC-V and LoongArch architectures.
 
-## File Systems
+## File systems
 
 Here is the list of supported file systems:
 * Devfs
@@ -388,7 +388,7 @@ Here is the list of supported symbols in vDSO:
 * `__vdso_gettimeofday`
 * `__vdso_time`
 
-## Boot Protocols
+## Boot protocols
 
 Here is the list of supported boot protocols:
 * [Multiboot](https://www.gnu.org/software/grub/manual/multiboot/multiboot.html)

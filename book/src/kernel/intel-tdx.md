@@ -33,7 +33,7 @@ excluding the safe device drivers built on top of the Asterinas Framework
 that may handle untrusted inputs from the host.
 For more information, see [our talk on OC3'24](https://www.youtube.com/watch?v=3AQ5lpXujGo).
 
-## Prepare the Intel TDX Environment
+## Prepare the Intel TDX environment
 
 Please make sure your server supports Intel TDX.
 
@@ -66,7 +66,7 @@ The following result is an example:
 2. Run a Docker container as the development environment.
 
     ```bash
-    docker run -it --privileged --network=host -v /dev:/dev -v $(pwd)/asterinas:/root/asterinas asterinas/asterinas:0.17.1-20260319
+    docker run -it --privileged --network=host -v /dev:/dev -v $(pwd)/asterinas:/root/asterinas asterinas/asterinas:0.17.2-20260407
     ```
     
 3. Inside the container,
@@ -79,7 +79,7 @@ go to the project folder to build and run Asterinas.
 If everything goes well,
 Asterinas is now up and running inside a TD.
 
-## Using GDB to Debug
+## Using GDB to debug
 
 A Trust Domain (TD) is debuggable if its `ATTRIBUTES.DEBUG` bit is 1.
 In this mode, the host VMM can use Intel TDX module functions

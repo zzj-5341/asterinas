@@ -19,7 +19,10 @@ use crate::{
         utils::DirentVisitor,
         vfs::{
             file_system::{FileSystem, SuperBlock},
-            inode::{Extension, FallocMode, Inode, InodeIo, Metadata, MknodType, SymbolicLink},
+            inode::{
+                Extension, FallocMode, Inode, InodeIo, Metadata, MknodType, RevalidationPolicy,
+                SymbolicLink,
+            },
         },
     },
     prelude::*,
@@ -614,7 +617,15 @@ impl<KInode: SysTreeInodeTy + Send + Sync + 'static> Inode for KInode {
         Err(Error::new(Errno::EOPNOTSUPP))
     }
 
-    default fn is_dentry_cacheable(&self) -> bool {
+    default fn revalidation_policy(&self) -> RevalidationPolicy {
+        RevalidationPolicy::empty()
+    }
+
+    default fn revalidate_exists(&self, _name: &str, _child: &dyn Inode) -> bool {
+        true
+    }
+
+    default fn revalidate_absent(&self, _name: &str) -> bool {
         true
     }
 
@@ -766,7 +777,7 @@ impl<KInode: SysTreeInodeTy> Iterator for ThisAndParentDentryIter<'_, KInode> {
 }
 
 /// A directory entry of sysfs.
-struct Dentry {
+pub(in crate::fs) struct Dentry {
     pub ino: Ino,
     pub name: SysStr,
     pub type_: InodeType,

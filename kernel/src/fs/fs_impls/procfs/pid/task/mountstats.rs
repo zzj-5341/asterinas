@@ -8,12 +8,13 @@ use crate::{
         file::mkmod,
         procfs::{
             pid::task::mountinfo::make_mount_point_path,
-            template::{FileOps, ProcFileBuilder},
+            template::{FileOps, ProcFile},
         },
         vfs::{inode::Inode, path::PathResolver},
     },
     prelude::*,
     process::posix_thread::AsPosixThread,
+    thread::Thread,
 };
 
 /// A single entry in the `mountstats` file.
@@ -41,10 +42,7 @@ pub struct MountStatsFileOps(TidDirOps);
 
 impl MountStatsFileOps {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        ProcFileBuilder::new(Self(dir.clone()), mkmod!(a+r))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcFile::new(Self(dir.clone()), parent, mkmod!(a+r))
     }
 
     /// Reads mount statistics for `/proc/[pid]/mountstats`.
@@ -84,8 +82,14 @@ impl MountStatsFileOps {
 }
 
 impl FileOps for MountStatsFileOps {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        self.0.thread()
+    }
+
     fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
-        let thread = self.0.thread();
+        let Some(thread) = self.0.thread() else {
+            return_errno_with_message!(Errno::ESRCH, "the thread does not exist");
+        };
         let posix_thread = thread.as_posix_thread().unwrap();
 
         let fs = posix_thread.read_fs();

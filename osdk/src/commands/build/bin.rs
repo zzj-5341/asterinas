@@ -103,7 +103,7 @@ pub fn make_elf_for_qemu(install_dir: impl AsRef<Path>, elf: &AsterBin, strip: b
         match status {
             Ok(status) => {
                 if !status.success() {
-                    panic!("Failed to strip kernel elf.");
+                    panic!("Failed to strip kernel ELF");
                 }
             }
             Err(err) => match err.kind() {
@@ -111,7 +111,7 @@ pub fn make_elf_for_qemu(install_dir: impl AsRef<Path>, elf: &AsterBin, strip: b
                     "`rust-strip` command not found. Please
                     try `cargo install cargo-binutils` and then rerun."
                 ),
-                _ => panic!("Strip kernel elf failed, err:{:#?}", err),
+                _ => panic!("Strip kernel ELF failed, error: {:#?}", err),
             },
         }
     } else {
@@ -187,6 +187,11 @@ fn install_setup_with_arch(
         cmd.arg("--version").arg(env!("CARGO_PKG_VERSION"));
     }
     cmd.arg("--target").arg(arch);
+    // Custom json target requires this cargo flag.
+    // See https://doc.rust-lang.org/cargo/reference/unstable.html#target-spec-json
+    if arch.ends_with(".json") {
+        cmd.arg("-Zjson-target-spec");
+    }
     cmd.arg("-Zbuild-std=core,alloc,compiler_builtins");
     cmd.arg("-Zbuild-std-features=compiler-builtins-mem");
     // Specify the build target directory to avoid cargo running

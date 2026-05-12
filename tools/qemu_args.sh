@@ -56,6 +56,32 @@ else
     CONSOLE_ARGS="-serial chardev:mux"
 fi
 
+if [ "$1" = "riscv" ]; then
+    # NOTE: The `/etc/profile.d/init.sh` assumes that `ext2.img` appears as the first block device (`/dev/vda`).
+    # The ordering below ensures `x1` (ext2.img) is discovered before `x0`, maintaining this assumption.
+    # TODO: Once UUID-based mounting is implemented, this strict ordering will no longer be required.
+    QEMU_ARGS="\
+        -cpu rv64,svpbmt=true \
+        -machine virt \
+        -m ${MEM:-8G} \
+        -smp ${SMP:-1} \
+        --no-reboot \
+        -nographic \
+        -display none \
+        -monitor chardev:mux \
+        -chardev stdio,id=mux,mux=on,signal=off,logfile=qemu.log \
+        -drive if=none,format=raw,id=x0,file=./test/initramfs/build/ext2.img \
+        -drive if=none,format=raw,id=x1,file=./test/initramfs/build/exfat.img \
+        -device virtio-blk-device,drive=x1 \
+        -device virtio-blk-device,drive=x0 \
+        -device virtio-keyboard-device \
+        -device virtio-serial-device \
+        $CONSOLE_ARGS \
+    "
+    echo $QEMU_ARGS
+    exit 0
+fi
+
 if [ "$1" = "tdx" ]; then
     TDX_OBJECT='{ "qom-type": "tdx-guest", "id": "tdx0", "sept-ve-disable": true, "quote-generation-socket": { "type": "vsock", "cid": "2", "port": "4050" } }'
 
@@ -133,6 +159,8 @@ else
         -machine q35,kernel-irqchip=split \
         -device virtio-blk-pci,bus=pcie.0,addr=0x6,drive=x0,serial=vext2,disable-legacy=on,disable-modern=off,queue-size=64,num-queues=1,request-merging=off,backend_defaults=off,discard=off,write-zeroes=off,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
         -device virtio-blk-pci,bus=pcie.0,addr=0x7,drive=x1,serial=vexfat,disable-legacy=on,disable-modern=off,queue-size=64,num-queues=1,request-merging=off,backend_defaults=off,discard=off,write-zeroes=off,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
+        -object rng-random,id=rng0,filename=/dev/urandom \
+        -device virtio-rng-pci,bus=pcie.0,addr=0x8,disable-legacy=on,disable-modern=off,rng=rng0,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
         -device virtio-net-pci,netdev=net01,disable-legacy=on,disable-modern=off$VIRTIO_NET_FEATURES$IOMMU_DEV_EXTRA \
         -device virtio-serial-pci,disable-legacy=on,disable-modern=off$IOMMU_DEV_EXTRA \
         $CONSOLE_ARGS \

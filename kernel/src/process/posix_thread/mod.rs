@@ -7,6 +7,7 @@ use ostd::{
     sync::{RoArc, RwMutexReadGuard, Waker},
     task::Task,
 };
+use spin::Once;
 
 use super::{
     Credentials, Process,
@@ -17,11 +18,12 @@ use crate::{
     fs::{file::file_table::FileTable, thread_info::ThreadFsInfo},
     prelude::*,
     process::{
-        Pid,
+        ExitCode, Pid,
         namespace::nsproxy::NsProxy,
+        posix_thread::ptrace::TraceeStatus,
         signal::{PauseReason, PollHandle, sig_mask::SigMask},
     },
-    thread::Tid,
+    thread::{Thread, Tid},
     time::{Timer, TimerManager, clocks::ProfClock, timer::TimerGuard},
 };
 
@@ -31,6 +33,7 @@ mod exit;
 pub mod futex;
 mod name;
 mod posix_thread_ext;
+pub mod ptrace;
 mod robust_list;
 mod thread_local;
 
@@ -90,6 +93,15 @@ pub struct PosixThread {
     timer_slack_ns: AtomicU64,
     /// The default timer slack value for this thread.
     default_timer_slack_ns: AtomicU64,
+
+    /// Status of being traced.
+    tracee_status: Once<TraceeStatus>,
+
+    /// Threads traced by this thread.
+    tracees: Once<Mutex<BTreeMap<Tid, Arc<Thread>>>>,
+
+    /// Exit code of this thread.
+    exit_code: AtomicU32,
 }
 
 impl PosixThread {
@@ -315,6 +327,16 @@ impl PosixThread {
     pub fn reset_timer_slack_to_default(&self) {
         let default = self.default_timer_slack_ns.load(Ordering::Relaxed);
         self.timer_slack_ns.store(default, Ordering::Relaxed);
+    }
+
+    /// Sets the exit code of this thread.
+    pub(super) fn set_exit_code(&self, exit_code: ExitCode) {
+        self.exit_code.store(exit_code, Ordering::Relaxed);
+    }
+
+    /// Returns the exit code of this thread.
+    pub fn exit_code(&self) -> ExitCode {
+        self.exit_code.load(Ordering::Relaxed)
     }
 }
 

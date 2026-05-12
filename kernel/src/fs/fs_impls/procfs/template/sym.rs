@@ -8,6 +8,7 @@ use super::Common;
 use crate::{
     fs::{
         file::{InodeMode, InodeType, StatusFlags},
+        procfs::{BLOCK_SIZE, ProcFs},
         vfs::{
             file_system::FileSystem,
             inode::{Extension, Inode, InodeIo, Metadata, SymbolicLink},
@@ -15,6 +16,7 @@ use crate::{
     },
     prelude::*,
     process::{Gid, Uid},
+    thread::Thread,
 };
 
 pub struct ProcSym<S: SymOps> {
@@ -23,31 +25,24 @@ pub struct ProcSym<S: SymOps> {
 }
 
 impl<S: SymOps> ProcSym<S> {
-    pub(super) fn new(
-        sym: S,
-        fs: Weak<dyn FileSystem>,
-        is_volatile: bool,
-        mode: InodeMode,
-    ) -> Arc<Self> {
-        let common = new_symlink_common(fs, mode, is_volatile);
+    pub fn new(sym: S, parent: Weak<dyn Inode>, mode: InodeMode) -> Arc<Self> {
+        let common = {
+            let fs = parent.upgrade().unwrap().fs();
+            let procfs = fs.downcast_ref::<ProcFs>().unwrap();
+            let metadata = Metadata::new_symlink(
+                procfs.alloc_id(),
+                mode,
+                BLOCK_SIZE,
+                procfs.sb().container_dev_id,
+            );
+            Common::new(metadata, Arc::downgrade(&fs))
+        };
         Arc::new(Self { inner: sym, common })
     }
 
     pub fn inner(&self) -> &S {
         &self.inner
     }
-}
-
-fn new_symlink_common(fs: Weak<dyn FileSystem>, mode: InodeMode, is_volatile: bool) -> Common {
-    let fs_ref = fs.upgrade().unwrap();
-    let procfs = fs_ref.downcast_ref::<super::ProcFs>().unwrap();
-    let metadata = Metadata::new_symlink(
-        procfs.alloc_id(),
-        mode,
-        super::BLOCK_SIZE,
-        procfs.sb().container_dev_id,
-    );
-    Common::new(metadata, fs, is_volatile)
 }
 
 impl<S: SymOps + 'static> InodeIo for ProcSym<S> {
@@ -73,7 +68,6 @@ impl<S: SymOps + 'static> InodeIo for ProcSym<S> {
 #[inherit_methods(from = "self.common")]
 impl<S: SymOps + 'static> Inode for ProcSym<S> {
     fn size(&self) -> usize;
-    fn metadata(&self) -> Metadata;
     fn extension(&self) -> &Extension;
     fn ino(&self) -> u64;
     fn mode(&self) -> Result<InodeMode>;
@@ -90,6 +84,11 @@ impl<S: SymOps + 'static> Inode for ProcSym<S> {
     fn set_ctime(&self, time: Duration);
     fn fs(&self) -> Arc<dyn FileSystem>;
 
+    fn metadata(&self) -> Metadata {
+        let owner_thread = self.inner.owner_thread();
+        self.common.metadata_with_owner(owner_thread)
+    }
+
     fn resize(&self, _new_size: usize) -> Result<()> {
         Err(Error::new(Errno::EPERM))
     }
@@ -105,12 +104,13 @@ impl<S: SymOps + 'static> Inode for ProcSym<S> {
     fn write_link(&self, _target: &str) -> Result<()> {
         Err(Error::new(Errno::EPERM))
     }
-
-    fn is_dentry_cacheable(&self) -> bool {
-        !self.common.is_volatile()
-    }
 }
 
 pub trait SymOps: Sync + Send {
+    /// Returns the thread whose credentials own this procfs inode.
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        None
+    }
+
     fn read_link(&self) -> Result<SymbolicLink>;
 }

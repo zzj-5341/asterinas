@@ -9,12 +9,13 @@ use crate::{
         file::mkmod,
         procfs::{
             pid::TidDirOps,
-            template::{FileOps, ProcFileBuilder},
+            template::{FileOps, ProcFile},
         },
         vfs::inode::Inode,
     },
     prelude::*,
     process::posix_thread::AsThreadLocal,
+    thread::Thread,
 };
 
 /// Represents the inode at `/proc/[pid]/task/[tid]/cgroup` (and also `/proc/[pid]/cgroup`).
@@ -23,16 +24,21 @@ pub struct CgroupFileOps(TidDirOps);
 impl CgroupFileOps {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
         // Reference: <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/base.c#L3379>
-        ProcFileBuilder::new(Self(dir.clone()), mkmod!(a+r))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcFile::new(Self(dir.clone()), parent, mkmod!(a+r))
     }
 }
 
 impl FileOps for CgroupFileOps {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        self.0.thread()
+    }
+
     fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
-        let cgroup: Arc<dyn CgroupSysNode> = match self.0.process_ref.cgroup().get() {
+        let Some(process) = self.0.process() else {
+            return_errno_with_message!(Errno::ESRCH, "the process does not exist");
+        };
+
+        let cgroup: Arc<dyn CgroupSysNode> = match process.cgroup().get() {
             Some(cgroup) => cgroup.clone(),
             None => CgroupSystem::singleton().clone(),
         };

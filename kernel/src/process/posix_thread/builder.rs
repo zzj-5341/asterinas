@@ -8,13 +8,14 @@ use ostd::{
     sync::RwArc,
     task::Task,
 };
+use spin::Once;
 
 use super::{PosixThread, ThreadLocal};
 use crate::{
     fs::{file::file_table::FileTable, thread_info::ThreadFsInfo},
     prelude::*,
     process::{
-        Credentials, NsProxy, Process, UserNamespace, pid_table,
+        Credentials, NsProxy, Process, UserNamespace,
         posix_thread::name::ThreadName,
         signal::{sig_mask::AtomicSigMask, sig_queues::SigQueues},
     },
@@ -178,6 +179,9 @@ impl PosixThreadBuilder {
                     ns_proxy: Mutex::new(Some(ns_proxy.clone())),
                     timer_slack_ns: AtomicU64::new(default_timer_slack_ns),
                     default_timer_slack_ns: AtomicU64::new(default_timer_slack_ns),
+                    tracee_status: Once::new(),
+                    tracees: Once::new(),
+                    exit_code: AtomicU32::new(0),
                 }
             };
 
@@ -200,7 +204,6 @@ impl PosixThreadBuilder {
                 ns_proxy,
             );
 
-            pid_table::pid_table_mut().insert_thread(tid, &thread);
             task::create_new_user_task(user_ctx, thread, thread_local)
         })
     }

@@ -3,43 +3,48 @@
 use core::time::Duration;
 
 pub(super) use self::{
-    builder::{ProcDirBuilder, ProcFileBuilder, ProcSymBuilder},
-    dir::{DirOps, ProcDir, lookup_child_from_table, populate_children_from_table},
+    dir::{
+        DirOps, ListedEntry, ProcDir, ReaddirEntry, StaticDirEntry, keyed_readdir_entries,
+        listed_entries_from_table, lookup_child_from_table, sequential_readdir_entries,
+        visit_listed_entries, visit_readdir_entries,
+    },
     file::{FileOps, FileOpsByHandle, ProcFile, read_i32_from},
     sym::{ProcSym, SymOps},
 };
-use super::{BLOCK_SIZE, ProcFs};
 use crate::{
     fs::{
-        file::{InodeMode, InodeType},
+        file::InodeMode,
         vfs::{
             file_system::FileSystem,
             inode::{Extension, Metadata},
         },
     },
     prelude::*,
-    process::{Gid, Uid},
+    process::{Gid, Uid, posix_thread::AsPosixThread},
+    thread::Thread,
 };
 
-mod builder;
 mod dir;
 mod file;
 mod sym;
 
+/// Shared procfs inode state.
+///
+/// FIXME: Procfs permissions should be checked during each operation, not by relying on mutable
+/// inode ownership. See Linux comment:
+/// <https://elixir.bootlin.com/linux/v6.13/source/fs/proc/base.c#L107>.
 struct Common {
     metadata: RwLock<Metadata>,
     extension: Extension,
     fs: Weak<dyn FileSystem>,
-    is_volatile: bool,
 }
 
 impl Common {
-    fn new(metadata: Metadata, fs: Weak<dyn FileSystem>, is_volatile: bool) -> Self {
+    fn new(metadata: Metadata, fs: Weak<dyn FileSystem>) -> Self {
         Self {
             metadata: RwLock::new(metadata),
             extension: Extension::new(),
             fs,
-            is_volatile,
         }
     }
 
@@ -51,12 +56,25 @@ impl Common {
         *self.metadata.read()
     }
 
-    fn ino(&self) -> u64 {
-        self.metadata.read().ino
+    fn metadata_with_owner(&self, owner_thread: Option<Arc<Thread>>) -> Metadata {
+        let Some(owner_thread) = owner_thread else {
+            return self.metadata();
+        };
+
+        let credentials = owner_thread.as_posix_thread().unwrap().credentials();
+        let mut metadata = self.metadata.write();
+        // Cache the dynamic owner into the metadata so that if the thread
+        // later exits, subsequent calls fall back to the last known owner
+        // instead of the root user. This is a best-effort attempt to align
+        // with Linux behavior. See:
+        // <https://github.com/asterinas/asterinas/pull/3164#discussion_r3212307770>.
+        metadata.uid = credentials.euid();
+        metadata.gid = credentials.egid();
+        *metadata
     }
 
-    fn type_(&self) -> InodeType {
-        self.metadata.read().type_
+    fn ino(&self) -> u64 {
+        self.metadata.read().ino
     }
 
     fn size(&self) -> usize {
@@ -112,10 +130,6 @@ impl Common {
     fn set_group(&self, gid: Gid) -> Result<()> {
         self.metadata.write().gid = gid;
         Ok(())
-    }
-
-    fn is_volatile(&self) -> bool {
-        self.is_volatile
     }
 
     fn extension(&self) -> &Extension {

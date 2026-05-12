@@ -26,7 +26,7 @@ thanks to the flexibility offered by [MPL](../).
 While the journey towards a production-grade OS kernel can be challenging,
 we are steadfastly progressing towards our goal.
 
-## Supported CPU Architectures
+## Supported CPU architectures
 
 Asterinas targets modern, 64-bit platforms only.
 
@@ -60,7 +60,7 @@ Tier definitions:
   but CI coverage is limited and
   may not include automated runtime tests for every pull request.
 
-## Getting Started
+## Getting started
 
 Get yourself an x86-64 (or ARM64) Linux machine with Docker installed.
 Follow the three simple steps below to get Asterinas up and running.
@@ -80,7 +80,7 @@ since `distro/README.md` references them -->
                 --network=host \
                 -v /dev:/dev \
                 -v $(pwd)/asterinas:/root/asterinas \
-                asterinas/asterinas:0.17.1-20260319
+                asterinas/asterinas:0.17.2-20260407
     ```
 
     Alternatively, if you use VS Code with the

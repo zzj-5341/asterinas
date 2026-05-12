@@ -6,7 +6,7 @@ use super::TidDirOps;
 use crate::{
     fs::{
         file::mkmod,
-        procfs::template::{FileOps, ProcFileBuilder},
+        procfs::template::{FileOps, ProcFile},
         vfs::{
             file_system::FsFlags,
             inode::Inode,
@@ -15,6 +15,7 @@ use crate::{
     },
     prelude::*,
     process::posix_thread::AsPosixThread,
+    thread::Thread,
 };
 
 /// A helper function to create the mount point path for a given mount (used by `mounts`,
@@ -90,10 +91,7 @@ pub struct MountInfoFileOps(TidDirOps);
 impl MountInfoFileOps {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
         // Reference: <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/base.c#L3352>
-        ProcFileBuilder::new(Self(dir.clone()), mkmod!(a+r))
-            .parent(parent)
-            .build()
-            .unwrap()
+        ProcFile::new(Self(dir.clone()), parent, mkmod!(a+r))
     }
 
     /// Reads mount information for `/proc/[pid]/mountinfo`.
@@ -154,8 +152,14 @@ impl MountInfoFileOps {
 }
 
 impl FileOps for MountInfoFileOps {
+    fn owner_thread(&self) -> Option<Arc<Thread>> {
+        self.0.thread()
+    }
+
     fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
-        let thread = self.0.thread();
+        let Some(thread) = self.0.thread() else {
+            return_errno_with_message!(Errno::ESRCH, "the thread does not exist");
+        };
         let posix_thread = thread.as_posix_thread().unwrap();
 
         let fs = posix_thread.read_fs();
