@@ -22,7 +22,7 @@ pub use self::{
 };
 use crate::prelude::*;
 
-/// Distinguishes major and minor LSMs.
+/// The kind of an LSM module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LsmKind {
     Minor,
