@@ -59,6 +59,11 @@ pub trait LsmModule: LsmPtraceCheck + Sync {
     fn flags(&self) -> LsmFlags;
 }
 
+/// Returns whether the Yama LSM is enabled.
+pub fn is_yama_enabled() -> bool {
+    modules::is_module_enabled("yama")
+}
+
 pub(super) fn init() {
     modules::init();
 
