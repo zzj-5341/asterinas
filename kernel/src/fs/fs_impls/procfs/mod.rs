@@ -70,6 +70,11 @@ const PROC_ROOT_INO: u64 = 1;
 /// Block size.
 const BLOCK_SIZE: usize = 1024;
 
+pub(in crate::fs::fs_impls::procfs) type StaticEntry =
+    StaticDirEntry<fn(Weak<dyn Inode>) -> Arc<dyn Inode>>;
+pub(in crate::fs::fs_impls::procfs) type StaticEntryWithOps<T> =
+    StaticDirEntry<fn(&T, Weak<dyn Inode>) -> Arc<dyn Inode>>;
+
 struct ProcFs {
     _anon_device_id: AnonDeviceId,
     sb: SuperBlock,
@@ -148,8 +153,7 @@ impl RootDirOps {
         ProcDir::new_root(Self, fs, PROC_ROOT_INO, sb, mkmod!(a+rx))
     }
 
-    #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [StaticDirEntry<fn(Weak<dyn Inode>) -> Arc<dyn Inode>>] = &[
+    const STATIC_ENTRIES: &'static [StaticEntry] = &[
         ("cmdline", InodeType::File, CmdLineFileOps::new_inode),
         ("cpuinfo", InodeType::File, CpuInfoFileOps::new_inode),
         (

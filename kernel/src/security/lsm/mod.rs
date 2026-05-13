@@ -22,28 +22,13 @@ pub use self::{
 };
 use crate::prelude::*;
 
-/// The kind of an LSM module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LsmKind {
-    Minor,
-    #[expect(dead_code)]
-    Major,
-}
-
-impl LsmKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Minor => "minor",
-            Self::Major => "major",
-        }
-    }
-}
-
 bitflags! {
     /// LSM module flags.
     pub struct LsmFlags: u32 {
+        /// Marks a module as selectable through the legacy `security=` parameter.
+        const LEGACY_MAJOR = 1 << 0;
         /// Marks a module as mutually exclusive with other exclusive modules.
-        const EXCLUSIVE = 1 << 0;
+        const EXCLUSIVE = 1 << 1;
     }
 }
 
@@ -52,26 +37,19 @@ pub trait LsmModule: LsmPtraceCheck + Sync {
     /// Returns the module name.
     fn name(&self) -> &'static str;
 
-    /// Returns the module kind.
-    fn kind(&self) -> LsmKind;
-
     /// Returns the module flags.
     fn flags(&self) -> LsmFlags;
 }
 
 /// Returns whether the Yama LSM is enabled.
 pub fn is_yama_enabled() -> bool {
-    modules::is_module_enabled("yama")
+    modules::active_modules()
+        .iter()
+        .any(|module| module.name() == "yama")
 }
 
 pub(super) fn init() {
-    modules::init();
-
     for module in modules::active_modules() {
-        info!(
-            "[kernel] LSM module enabled: {} ({})",
-            module.name(),
-            module.kind().as_str()
-        );
+        info!("[kernel] LSM module enabled: {}", module.name());
     }
 }

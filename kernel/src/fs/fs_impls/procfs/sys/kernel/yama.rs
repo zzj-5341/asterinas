@@ -5,10 +5,12 @@ use aster_util::printer::VmPrinter;
 use crate::{
     fs::{
         file::{InodeType, mkmod},
-        procfs::template::{
-            DirOps, FileOps, ProcDir, ProcFile, ReaddirEntry, StaticDirEntry,
-            listed_entries_from_table, lookup_child_from_table, read_i32_from,
-            visit_listed_entries,
+        procfs::{
+            StaticEntry,
+            template::{
+                DirOps, FileOps, ProcDir, ProcFile, ReaddirEntry, listed_entries_from_table,
+                lookup_child_from_table, read_i32_from, visit_listed_entries,
+            },
         },
         vfs::inode::Inode,
     },
@@ -27,8 +29,7 @@ impl YamaDirOps {
         ProcDir::new(Self, parent, mkmod!(a+rx))
     }
 
-    #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [StaticDirEntry<fn(Weak<dyn Inode>) -> Arc<dyn Inode>>] = &[(
+    const STATIC_ENTRIES: &'static [StaticEntry] = &[(
         "ptrace_scope",
         InodeType::File,
         PtraceScopeFileOps::new_inode,
