@@ -2,9 +2,7 @@
 
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use super::super::{
-    LsmFlags, LsmKind, LsmModule, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind,
-};
+use super::super::{LsmFlags, LsmModule, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind};
 use crate::{
     prelude::*,
     process::{
@@ -47,10 +45,6 @@ impl LsmPtraceCheck for YamaLsm {
 impl LsmModule for YamaLsm {
     fn name(&self) -> &'static str {
         "yama"
-    }
-
-    fn kind(&self) -> LsmKind {
-        LsmKind::Minor
     }
 
     fn flags(&self) -> LsmFlags {

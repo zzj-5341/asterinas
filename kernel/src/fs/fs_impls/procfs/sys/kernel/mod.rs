@@ -9,7 +9,7 @@ use crate::{
                 cap_last_cap::CapLastCapFileOps, pid_max::PidMaxFileOps, yama::YamaDirOps,
             },
             template::{
-                DirOps, ReaddirEntry, StaticDirEntry, listed_entries_from_table,
+                DirOps, ListedEntry, ReaddirEntry, StaticDirEntry, listed_entries_from_table,
                 lookup_child_from_table, visit_listed_entries,
             },
         },
@@ -44,32 +44,18 @@ impl KernelDirOps {
         ),
         ("pid_max", InodeType::File, PidMaxFileOps::new_inode),
     ];
-
-    const STATIC_ENTRIES_WITH_YAMA: &'static [StaticEntry] = &[
-        (
-            "cap_last_cap",
-            InodeType::File,
-            CapLastCapFileOps::new_inode,
-        ),
-        ("pid_max", InodeType::File, PidMaxFileOps::new_inode),
-        ("yama", InodeType::Dir, YamaDirOps::new_inode),
-    ];
-
-    fn static_entries() -> &'static [StaticEntry] {
-        if is_yama_enabled() {
-            Self::STATIC_ENTRIES_WITH_YAMA
-        } else {
-            Self::STATIC_ENTRIES
-        }
-    }
 }
 
 impl DirOps for KernelDirOps {
     fn lookup_child(&self, this_dir: &ProcDir<Self>, name: &str) -> Result<Arc<dyn Inode>> {
-        if let Some(child) = lookup_child_from_table(name, Self::static_entries(), |f| {
+        if let Some(child) = lookup_child_from_table(name, Self::STATIC_ENTRIES, |f| {
             (f)(this_dir.this_weak().clone())
         }) {
             return Ok(child);
+        }
+
+        if name == "yama" && is_yama_enabled() {
+            return Ok(YamaDirOps::new_inode(this_dir.this_weak().clone()));
         }
 
         return_errno_with_message!(Errno::ENOENT, "the file does not exist");
@@ -79,9 +65,11 @@ impl DirOps for KernelDirOps {
     where
         F: FnMut(ReaddirEntry<'a>) -> Result<()>,
     {
+        let yama_entry = is_yama_enabled().then(|| ListedEntry::new("yama", InodeType::Dir));
+
         visit_listed_entries(
             offset,
-            listed_entries_from_table(Self::static_entries()),
+            listed_entries_from_table(Self::STATIC_ENTRIES).chain(yama_entry),
             visit_fn,
         )
     }
