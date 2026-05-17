@@ -34,6 +34,7 @@ pub(super) fn init() {
     });
 }
 
+/// Runs the LSM stack for a capability check.
 pub fn capable(
     user_namespace: &UserNamespace,
     capability: CapSet,

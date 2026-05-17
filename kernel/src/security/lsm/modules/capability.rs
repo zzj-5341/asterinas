@@ -38,7 +38,9 @@ impl LsmCapabilityHook for CapabilityLsm {
             );
         }
 
-        let _ = context.reason();
+        // Capability bit checks are reason-independent. The reason stays in the
+        // shared context for modules that need operation-specific policy.
+        let _reason = context.reason();
         if context
             .posix_thread()
             .credentials()
