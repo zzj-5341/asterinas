@@ -49,10 +49,7 @@ pub fn capable(
 }
 
 /// Updates security state after credentials are committed for a new executable.
-pub fn bprm_committed_creds(
-    _path: &Path,
-    _credentials: &Credentials<ReadWriteOp>,
-) -> Result<()> {
+pub fn bprm_committed_creds(_path: &Path, _credentials: &Credentials<ReadWriteOp>) -> Result<()> {
     Ok(())
 }
 
