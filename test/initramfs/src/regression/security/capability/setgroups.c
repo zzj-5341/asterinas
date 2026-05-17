@@ -36,10 +36,7 @@ static int check_setgroups(bool drop_capability)
 	gid_t groups[] = { 0, 65534 };
 	int status;
 
-	pid_t pid = fork();
-	if (pid < 0) {
-		return -1;
-	}
+	pid_t pid = CHECK(fork());
 
 	if (pid == 0) {
 		if (drop_capability) {
@@ -57,9 +54,7 @@ static int check_setgroups(bool drop_capability)
 		_exit(ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
 
-	if (waitpid(pid, &status, 0) != pid) {
-		return -1;
-	}
+	CHECK_WITH(waitpid(pid, &status, 0), _ret == pid);
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
 		errno = EINVAL;
