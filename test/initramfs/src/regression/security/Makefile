@@ -3,5 +3,6 @@
 SUBDIRS := \
 	capability \
 	namespace \
+	lsm \
 
 include ../common/Makefile
