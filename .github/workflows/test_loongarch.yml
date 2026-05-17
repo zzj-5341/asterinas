@@ -23,4 +23,5 @@ jobs:
         uses: ./.github/actions/test
         with:
           auto_test: 'general'
+          runs_on: 'ubuntu-latest'
           arch: 'loongarch64'
