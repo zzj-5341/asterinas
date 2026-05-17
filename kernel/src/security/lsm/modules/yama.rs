@@ -2,7 +2,7 @@
 
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use super::super::{LsmKind, LsmModule, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind};
+use super::super::{LsmFlags, LsmModule, LsmPtraceCheck, PtraceAccessContext, PtraceAccessKind};
 use crate::{
     prelude::*,
     process::{
@@ -47,11 +47,9 @@ impl LsmModule for YamaLsm {
         "yama"
     }
 
-    fn kind(&self) -> LsmKind {
-        LsmKind::Minor
+    fn flags(&self) -> LsmFlags {
+        LsmFlags::empty()
     }
-
-    fn init(&self) {}
 }
 
 /// Returns the current Yama scope for alien access.

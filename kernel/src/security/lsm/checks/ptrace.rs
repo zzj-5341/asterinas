@@ -82,11 +82,11 @@ impl<'a> PtraceAccessContext<'a> {
         }
     }
 
-    pub const fn accessor(&self) -> &'a PosixThread {
+    pub const fn accessor(&self) -> &PosixThread {
         self.accessor
     }
 
-    pub const fn target(&self) -> &'a PosixThread {
+    pub const fn target(&self) -> &PosixThread {
         self.target
     }
 
