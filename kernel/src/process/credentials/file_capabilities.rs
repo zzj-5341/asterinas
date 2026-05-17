@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::mem::size_of;
+use core::mem;
 
 use super::{Uid, capabilities::CapSet};
 use crate::{
@@ -18,9 +18,9 @@ const VFS_CAP_REVISION_1: u32 = 0x0100_0000;
 const VFS_CAP_REVISION_2: u32 = 0x0200_0000;
 const VFS_CAP_REVISION_3: u32 = 0x0300_0000;
 
-const XATTR_CAPS_SZ_1: usize = 3 * size_of::<u32>();
-const XATTR_CAPS_SZ_2: usize = 5 * size_of::<u32>();
-const XATTR_CAPS_SZ_3: usize = 6 * size_of::<u32>();
+const XATTR_CAPS_SZ_1: usize = 3 * mem::size_of::<u32>();
+const XATTR_CAPS_SZ_2: usize = 5 * mem::size_of::<u32>();
+const XATTR_CAPS_SZ_3: usize = 6 * mem::size_of::<u32>();
 
 /// File capabilities loaded from the `security.capability` xattr.
 #[derive(Clone, Copy, Debug)]
@@ -121,14 +121,14 @@ impl FileCapabilities {
 
 fn read_u32_le(bytes: &[u8], word_index: usize) -> Result<u32> {
     let start = word_index
-        .checked_mul(size_of::<u32>())
+        .checked_mul(mem::size_of::<u32>())
         .ok_or_else(|| invalid_xattr_error("file capability xattr index overflowed"))?;
-    let end = start + size_of::<u32>();
+    let end = start + mem::size_of::<u32>();
     let Some(word_bytes) = bytes.get(start..end) else {
         return Err(invalid_xattr_error("file capability xattr is truncated"));
     };
 
-    let mut word = [0u8; size_of::<u32>()];
+    let mut word = [0u8; mem::size_of::<u32>()];
     word.copy_from_slice(word_bytes);
     Ok(u32::from_le_bytes(word))
 }
