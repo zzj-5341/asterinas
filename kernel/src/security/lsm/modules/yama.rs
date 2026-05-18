@@ -4,7 +4,10 @@ use core::sync::atomic::{AtomicI32, Ordering};
 
 use atomic_integer_wrapper::define_atomic_version_of_integer_like_type;
 
-use super::super::{AlienAccessContext, LsmFlags, LsmModule, hooks::LsmAlienAccessHook};
+use super::super::{
+    AlienAccessContext, LsmFlags, LsmModule,
+    hooks::{LsmAlienAccessHook, LsmCapabilityHook, LsmInodeHook},
+};
 use crate::{
     prelude::*,
     process::{
@@ -12,6 +15,7 @@ use crate::{
         credentials::capabilities::CapSet,
         posix_thread::{AsPosixThread, alien_access::AlienAccessKind},
     },
+    security::CapabilityReason,
 };
 
 pub static YAMA_LSM: YamaLsm = YamaLsm;
@@ -56,6 +60,10 @@ impl LsmModule for YamaLsm {
     }
 }
 
+impl LsmCapabilityHook for YamaLsm {}
+
+impl LsmInodeHook for YamaLsm {}
+
 /// Returns the current Yama scope for alien access.
 pub fn get_scope() -> YamaScope {
     YAMA_SCOPE.load(Ordering::Relaxed)
@@ -63,9 +71,10 @@ pub fn get_scope() -> YamaScope {
 
 /// Sets the Yama scope for alien access.
 pub fn set_scope(new_scope: YamaScope) -> Result<()> {
-    UserNamespace::get_init_singleton().check_cap(
+    UserNamespace::get_init_singleton().check_cap_with_reason(
         CapSet::SYS_PTRACE,
         current_thread!().as_posix_thread().unwrap(),
+        CapabilityReason::Ptrace,
     )?;
 
     YAMA_SCOPE
