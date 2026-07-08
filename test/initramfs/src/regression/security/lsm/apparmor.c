@@ -51,9 +51,21 @@ static const char *SECURITYFS_APPARMOR_PROFILES =
 	"/tmp/apparmor-securityfs/apparmor/profiles";
 static const char *SECURITYFS_APPARMOR_ABI =
 	"/tmp/apparmor-securityfs/apparmor/features/abi";
+static const char *SECURITYFS_APPARMOR_PERMSTABLE =
+	"/tmp/apparmor-securityfs/apparmor/features/policy/permstable32";
+static const char *SECURITYFS_APPARMOR_FILE_MASK =
+	"/tmp/apparmor-securityfs/apparmor/features/file/mask";
+static const char *SECURITYFS_APPARMOR_DOMAIN_STACK =
+	"/tmp/apparmor-securityfs/apparmor/features/domain/stack";
 
 static bool securityfs_mounted;
 
+static const char *POLICY_MODE_PROFILE_ENFORCE = "asterinas-aa-mode-enforce";
+static const char *POLICY_MODE_PROFILE_COMPLAIN = "asterinas-aa-mode-complain";
+static const char *POLICY_MODE_PROFILE_COMPLAIN_IMPLICIT =
+	"asterinas-aa-mode-complain-implicit";
+static const char *POLICY_REPLACE_PROFILE_NAME = "asterinas-aa-replace-remove";
+static const char *POLICY_MODE_PATH = "/tmp/aa-policy-mode";
 static const char *FILE_HOOK_PROFILE_NAME = "asterinas-aa-file-hooks";
 static const char *FILE_HOOK_PREOPENED_PATH = "/tmp/aa-file-preopened";
 static const char *FILE_HOOK_ACCESS_PATH = "/tmp/aa-file-access";
@@ -75,18 +87,32 @@ static const char *ONEXEC_TARGET_PROFILE_NAME = "asterinas-aa-onexec-target";
 static const char *EXEC_UNSAFE_SOURCE_PROFILE_NAME =
 	"asterinas-aa-unsafe-source";
 static const char *EXEC_SOURCE_PROFILE_NAME = "asterinas-aa-exec-source";
+static const char *EXEC_IX_SOURCE_PROFILE_NAME = "asterinas-aa-ix-source";
+static const char *EXEC_UX_UNSAFE_SOURCE_PROFILE_NAME =
+	"asterinas-aa-ux-unsafe-source";
 static const char *EXEC_UX_SOURCE_PROFILE_NAME = "asterinas-aa-ux-source";
 static const char *EXEC_CHILD_SOURCE_PROFILE_NAME = "asterinas-aa-child-source";
-#define EXEC_CHILD_TARGET_PROFILE_NAME "asterinas-aa-child-target"
+static const char *EXEC_CX_SOURCE_PROFILE_NAME = "asterinas-aa-cx-source";
+static const char *EXEC_BAD_CHILD_SOURCE_PROFILE_NAME =
+	"asterinas-aa-bad-child-source";
+#define EXEC_CHILD_TARGET_PROFILE_NAME "asterinas-aa-child-source//target"
+#define EXEC_CX_TARGET_PROFILE_NAME "asterinas-aa-cx-source//target"
 static const char *ONEXEC_OUTPUT_PATH = "/tmp/aa-onexec-current";
 static const char *EXEC_UNSAFE_OUTPUT_PATH = "/tmp/aa-unsafe-current";
 static const char *EXEC_UNSAFE_SECURE_PATH = "/tmp/aa-unsafe-secure";
 static const char *EXEC_TRANSITION_OUTPUT_PATH = "/tmp/aa-exec-current";
 static const char *EXEC_TRANSITION_SECURE_PATH = "/tmp/aa-exec-secure";
+static const char *EXEC_IX_OUTPUT_PATH = "/tmp/aa-ix-current";
+static const char *EXEC_IX_SECURE_PATH = "/tmp/aa-ix-secure";
+static const char *EXEC_UX_UNSAFE_OUTPUT_PATH = "/tmp/aa-ux-unsafe-current";
+static const char *EXEC_UX_UNSAFE_SECURE_PATH = "/tmp/aa-ux-unsafe-secure";
 static const char *EXEC_UX_OUTPUT_PATH = "/tmp/aa-ux-current";
 static const char *EXEC_UX_SECURE_PATH = "/tmp/aa-ux-secure";
 static const char *EXEC_CHILD_OUTPUT_PATH = "/tmp/aa-child-current";
 static const char *EXEC_CHILD_SECURE_PATH = "/tmp/aa-child-secure";
+static const char *EXEC_CX_OUTPUT_PATH = "/tmp/aa-cx-current";
+static const char *EXEC_CX_SECURE_PATH = "/tmp/aa-cx-secure";
+static const char *EXEC_DENIED_OUTPUT_PATH = "/tmp/aa-denied-current";
 
 static void read_cmdline(char cmdline[CMDLINE_BUFFER_SIZE])
 {
@@ -335,6 +361,22 @@ static int read_file_equals(const char *path, const char *expected)
 	return 0;
 }
 
+static int read_file_not_contains(const char *path, const char *unexpected)
+{
+	char buffer[FILE_BUFFER_SIZE];
+
+	if (read_text_file(path, buffer, sizeof(buffer)) < 0) {
+		return -1;
+	}
+
+	if (strstr(buffer, unexpected) != NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	return 0;
+}
+
 static int mount_securityfs(void)
 {
 	if (mkdir(SECURITYFS_MOUNT_DIR, 0755) < 0 && errno != EEXIST) {
@@ -417,6 +459,38 @@ static int expect_eacces(int result)
 		return -1;
 	}
 	errno = 0;
+	return 0;
+}
+
+static int run_read_policy_mode_child(const char *profile_name,
+				      bool expect_denied)
+{
+	int fd;
+
+	if (write_text_file(APPARMOR_PROC_CURRENT_PATH, profile_name) < 0) {
+		return 1;
+	}
+
+	fd = open(POLICY_MODE_PATH, O_RDONLY);
+	if (expect_denied) {
+		if (fd >= 0) {
+			close(fd);
+			return 2;
+		}
+		if (errno != EACCES) {
+			return 3;
+		}
+		errno = 0;
+		return 0;
+	}
+
+	if (fd < 0) {
+		return 4;
+	}
+	if (close(fd) < 0) {
+		return 5;
+	}
+
 	return 0;
 }
 
@@ -541,9 +615,13 @@ static int run_change_profile_child(void)
 			     "asterinas-aa-change-source\n") < 0) {
 		return 5;
 	}
+	if (expect_eacces(write_text_file(APPARMOR_ATTR_EXEC_PATH,
+					  ONEXEC_TARGET_PROFILE_NAME)) < 0) {
+		return 6;
+	}
 	if (expect_eacces(write_text_file(APPARMOR_ATTR_CURRENT_PATH,
 					  CHANGE_SOURCE_PROFILE_NAME)) < 0) {
-		return 6;
+		return 7;
 	}
 
 	return 0;
@@ -583,6 +661,21 @@ static int run_exec_transition_child(const char *profile_name,
 		execl(EXEC_HELPER_PATH, EXEC_HELPER_PATH, output_path, NULL);
 	}
 	return 2;
+}
+
+static int run_denied_exec_transition_child(const char *profile_name)
+{
+	if (write_text_file(APPARMOR_ATTR_CURRENT_PATH, profile_name) < 0) {
+		return 1;
+	}
+
+	execl(EXEC_HELPER_PATH, EXEC_HELPER_PATH, EXEC_DENIED_OUTPUT_PATH,
+	      NULL);
+	if (errno != EACCES) {
+		return 2;
+	}
+
+	return 0;
 }
 
 FN_SETUP(register_securityfs_cleanup)
@@ -653,6 +746,106 @@ FN_TEST(securityfs_visibility_follows_lsm_selection)
 }
 END_TEST()
 
+FN_TEST(policy_modes_features_and_lifecycle)
+{
+	static const char enforce_policy[] =
+		"profile asterinas-aa-mode-enforce enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"deny /tmp/aa-policy-mode r audit\n";
+	static const char complain_policy[] =
+		"profile asterinas-aa-mode-complain complain\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"deny /tmp/aa-policy-mode r audit\n";
+	static const char complain_implicit_policy[] =
+		"profile asterinas-aa-mode-complain-implicit complain\n"
+		"allow capability all\n";
+	static const char replace_deny_policy[] =
+		"profile asterinas-aa-replace-remove enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"deny /tmp/aa-policy-mode r\n";
+	static const char replace_allow_policy[] =
+		"profile asterinas-aa-replace-remove enforce\n"
+		"allow capability all\n"
+		"allow /** all\n";
+	static const char remove_policy[] =
+		"remove asterinas-aa-replace-remove\n";
+	pid_t child;
+	bool expect_apparmor = expect_apparmor_enabled();
+
+	SKIP_TEST_IF(!expect_apparmor);
+
+	TEST_SUCC(create_text_file(POLICY_MODE_PATH, "mode"));
+	TEST_SUCC(mount_securityfs());
+	TEST_SUCC(read_file_contains(SECURITYFS_APPARMOR_ABI,
+				     "policy_abi=linux-v5-v9-subset"));
+	TEST_SUCC(read_file_contains(SECURITYFS_APPARMOR_ABI, "complain=yes"));
+	TEST_SUCC(read_file_contains(SECURITYFS_APPARMOR_PERMSTABLE,
+				     "allow deny audit quiet xindex"));
+	TEST_SUCC(read_file_contains(SECURITYFS_APPARMOR_FILE_MASK,
+				     "delete rename setattr"));
+	TEST_ERRNO(stat_file_type(SECURITYFS_APPARMOR_DOMAIN_STACK, S_IFREG),
+		   ENOENT);
+	cleanup_securityfs_mount();
+
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, enforce_policy));
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_read_policy_mode_child(POLICY_MODE_PROFILE_ENFORCE,
+						 true));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH,
+				  complain_implicit_policy));
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_read_policy_mode_child(
+			POLICY_MODE_PROFILE_COMPLAIN_IMPLICIT, false));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, complain_policy));
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_read_policy_mode_child(POLICY_MODE_PROFILE_COMPLAIN,
+						 true));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+
+	TEST_SUCC(
+		write_text_file(APPARMOR_PROC_LOAD_PATH, replace_deny_policy));
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_read_policy_mode_child(POLICY_REPLACE_PROFILE_NAME,
+						 true));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+
+	TEST_SUCC(
+		write_text_file(APPARMOR_PROC_LOAD_PATH, replace_allow_policy));
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_read_policy_mode_child(POLICY_REPLACE_PROFILE_NAME,
+						 false));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, remove_policy));
+	TEST_SUCC(read_file_not_contains(APPARMOR_PROC_PROFILES_PATH,
+					 POLICY_REPLACE_PROFILE_NAME));
+
+	unlink(POLICY_MODE_PATH);
+}
+END_TEST()
+
 FN_TEST(profile_change_and_exec_transition)
 {
 	static const char change_source_policy[] =
@@ -683,6 +876,16 @@ FN_TEST(profile_change_and_exec_transition)
 		"profile asterinas-aa-exec-target enforce\n"
 		"allow capability all\n"
 		"allow /** all\n";
+	static const char ix_source_policy[] =
+		"profile asterinas-aa-ix-source enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"allow /test/security/lsm/apparmor_exec_helper x ix\n";
+	static const char ux_unsafe_source_policy[] =
+		"profile asterinas-aa-ux-unsafe-source enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"allow /test/security/lsm/apparmor_exec_helper x ux\n";
 	static const char ux_source_policy[] =
 		"profile asterinas-aa-ux-source enforce\n"
 		"allow capability all\n"
@@ -692,11 +895,28 @@ FN_TEST(profile_change_and_exec_transition)
 		"profile asterinas-aa-child-source enforce\n"
 		"allow capability all\n"
 		"allow /** all\n"
-		"allow /test/security/lsm/apparmor_exec_helper x Cx:asterinas-aa-child-target\n";
+		"allow /test/security/lsm/apparmor_exec_helper x Cx:" EXEC_CHILD_TARGET_PROFILE_NAME
+		"\n";
 	static const char child_target_policy[] =
-		"profile asterinas-aa-child-target enforce\n"
+		"profile " EXEC_CHILD_TARGET_PROFILE_NAME " enforce\n"
 		"allow capability all\n"
 		"allow /** all\n";
+	static const char cx_source_policy[] =
+		"profile asterinas-aa-cx-source enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"allow /test/security/lsm/apparmor_exec_helper x cx:" EXEC_CX_TARGET_PROFILE_NAME
+		"\n";
+	static const char cx_target_policy[] =
+		"profile " EXEC_CX_TARGET_PROFILE_NAME " enforce\n"
+		"allow capability all\n"
+		"allow /** all\n";
+	static const char bad_child_source_policy[] =
+		"profile asterinas-aa-bad-child-source enforce\n"
+		"allow capability all\n"
+		"allow /** all\n"
+		"allow /test/security/lsm/apparmor_exec_helper x cx:"
+		"asterinas-aa-exec-target\n";
 	pid_t child;
 	bool expect_apparmor = expect_apparmor_enabled();
 
@@ -707,10 +927,17 @@ FN_TEST(profile_change_and_exec_transition)
 	unlink(EXEC_UNSAFE_SECURE_PATH);
 	unlink(EXEC_TRANSITION_OUTPUT_PATH);
 	unlink(EXEC_TRANSITION_SECURE_PATH);
+	unlink(EXEC_IX_OUTPUT_PATH);
+	unlink(EXEC_IX_SECURE_PATH);
+	unlink(EXEC_UX_UNSAFE_OUTPUT_PATH);
+	unlink(EXEC_UX_UNSAFE_SECURE_PATH);
 	unlink(EXEC_UX_OUTPUT_PATH);
 	unlink(EXEC_UX_SECURE_PATH);
 	unlink(EXEC_CHILD_OUTPUT_PATH);
 	unlink(EXEC_CHILD_SECURE_PATH);
+	unlink(EXEC_CX_OUTPUT_PATH);
+	unlink(EXEC_CX_SECURE_PATH);
+	unlink(EXEC_DENIED_OUTPUT_PATH);
 
 	TEST_SUCC(
 		write_text_file(APPARMOR_PROC_LOAD_PATH, change_target_policy));
@@ -722,11 +949,18 @@ FN_TEST(profile_change_and_exec_transition)
 	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH,
 				  exec_unsafe_source_policy));
 	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, exec_source_policy));
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, ix_source_policy));
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH,
+				  ux_unsafe_source_policy));
 	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, ux_source_policy));
 	TEST_SUCC(
 		write_text_file(APPARMOR_PROC_LOAD_PATH, child_target_policy));
 	TEST_SUCC(
 		write_text_file(APPARMOR_PROC_LOAD_PATH, child_source_policy));
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, cx_target_policy));
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH, cx_source_policy));
+	TEST_SUCC(write_text_file(APPARMOR_PROC_LOAD_PATH,
+				  bad_child_source_policy));
 
 	child = fork();
 	TEST(child, 0, _ret >= 0);
@@ -771,6 +1005,30 @@ FN_TEST(profile_change_and_exec_transition)
 	child = fork();
 	TEST(child, 0, _ret >= 0);
 	if (child == 0) {
+		_exit(run_exec_transition_child(EXEC_IX_SOURCE_PROFILE_NAME,
+						EXEC_IX_OUTPUT_PATH,
+						EXEC_IX_SECURE_PATH));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+	TEST_SUCC(read_file_equals(EXEC_IX_OUTPUT_PATH,
+				   "asterinas-aa-ix-source\n"));
+	TEST_SUCC(read_file_equals(EXEC_IX_SECURE_PATH, "0\n"));
+
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_exec_transition_child(
+			EXEC_UX_UNSAFE_SOURCE_PROFILE_NAME,
+			EXEC_UX_UNSAFE_OUTPUT_PATH,
+			EXEC_UX_UNSAFE_SECURE_PATH));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+	TEST_SUCC(read_file_equals(EXEC_UX_UNSAFE_OUTPUT_PATH, "unconfined\n"));
+	TEST_SUCC(read_file_equals(EXEC_UX_UNSAFE_SECURE_PATH, "0\n"));
+
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
 		_exit(run_exec_transition_child(EXEC_UX_SOURCE_PROFILE_NAME,
 						EXEC_UX_OUTPUT_PATH,
 						EXEC_UX_SECURE_PATH));
@@ -791,15 +1049,43 @@ FN_TEST(profile_change_and_exec_transition)
 				   EXEC_CHILD_TARGET_PROFILE_NAME "\n"));
 	TEST_SUCC(read_file_equals(EXEC_CHILD_SECURE_PATH, "1\n"));
 
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_exec_transition_child(EXEC_CX_SOURCE_PROFILE_NAME,
+						EXEC_CX_OUTPUT_PATH,
+						EXEC_CX_SECURE_PATH));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+	TEST_SUCC(read_file_equals(EXEC_CX_OUTPUT_PATH,
+				   EXEC_CX_TARGET_PROFILE_NAME "\n"));
+	TEST_SUCC(read_file_equals(EXEC_CX_SECURE_PATH, "0\n"));
+
+	child = fork();
+	TEST(child, 0, _ret >= 0);
+	if (child == 0) {
+		_exit(run_denied_exec_transition_child(
+			EXEC_BAD_CHILD_SOURCE_PROFILE_NAME));
+	}
+	TEST_SUCC(wait_for_child_success(child));
+	TEST_ERRNO(stat_file_type(EXEC_DENIED_OUTPUT_PATH, S_IFREG), ENOENT);
+
 	unlink(ONEXEC_OUTPUT_PATH);
 	unlink(EXEC_UNSAFE_OUTPUT_PATH);
 	unlink(EXEC_UNSAFE_SECURE_PATH);
 	unlink(EXEC_TRANSITION_OUTPUT_PATH);
 	unlink(EXEC_TRANSITION_SECURE_PATH);
+	unlink(EXEC_IX_OUTPUT_PATH);
+	unlink(EXEC_IX_SECURE_PATH);
+	unlink(EXEC_UX_UNSAFE_OUTPUT_PATH);
+	unlink(EXEC_UX_UNSAFE_SECURE_PATH);
 	unlink(EXEC_UX_OUTPUT_PATH);
 	unlink(EXEC_UX_SECURE_PATH);
 	unlink(EXEC_CHILD_OUTPUT_PATH);
 	unlink(EXEC_CHILD_SECURE_PATH);
+	unlink(EXEC_CX_OUTPUT_PATH);
+	unlink(EXEC_CX_SECURE_PATH);
+	unlink(EXEC_DENIED_OUTPUT_PATH);
 }
 END_TEST()
 
