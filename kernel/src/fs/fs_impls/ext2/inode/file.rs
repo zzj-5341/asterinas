@@ -590,6 +590,46 @@ mod test {
         assert_eq!(readback, base_data);
     }
 
+    #[ktest]
+    fn direct_write_preflight_rejects_unaligned_range() {
+        clocks::init_for_ktest();
+
+        let fixture = Ext2FixtureBuilder::new(1, 256)
+            .with_free_blocks(8, 8)
+            .with_free_inodes(1000, 1000)
+            .with_group0_used_dirs(1)
+            .build()
+            .unwrap();
+        let file = create_file(&fixture.root(), "direct_preflight");
+
+        assert_errno!(
+            file.prepare_write_at(1, BLOCK_SIZE, StatusFlags::O_DIRECT),
+            Errno::EINVAL
+        );
+        assert_errno!(
+            file.prepare_write_at(0, BLOCK_SIZE - 1, StatusFlags::O_DIRECT),
+            Errno::EINVAL
+        );
+        assert_eq!(file.file_size(), 0);
+    }
+
+    #[ktest]
+    fn resize_preflight_rejects_oversized_file() {
+        clocks::init_for_ktest();
+
+        let fixture = Ext2FixtureBuilder::new(1, 256)
+            .with_free_blocks(8, 8)
+            .with_free_inodes(1000, 1000)
+            .with_group0_used_dirs(1)
+            .build()
+            .unwrap();
+        let file = create_file(&fixture.root(), "resize_preflight");
+        let oversized_file = fixture.ext2.max_file_size().checked_add(1).unwrap();
+
+        assert_errno!(file.check_resize(oversized_file), Errno::EFBIG);
+        assert_eq!(file.file_size(), 0);
+    }
+
     // TODO: Enable this test once page-table dirty bits are propagated back to
     // the VMO. Currently the hardware dirty flag set by mmap writes is not
     // reflected in the VMO's dirty tracking, so a subsequent buffered write to

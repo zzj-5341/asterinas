@@ -185,3 +185,29 @@ fn read_u32_le(bytes: &[u8], word_index: usize) -> Result<u32> {
     word.copy_from_slice(word_bytes);
     Ok(u32::from_le_bytes(word))
 }
+
+#[cfg(ktest)]
+mod tests {
+    use ostd::prelude::ktest;
+
+    use super::{CapSet, FileCapabilities, VfsCapFlags, VfsCapRevision};
+
+    #[ktest]
+    fn parses_v1_file_capabilities() {
+        let raw_value = [
+            (VfsCapRevision::V1 as u32 | VfsCapFlags::EFFECTIVE.bits()).to_le_bytes(),
+            0x0400_u32.to_le_bytes(),
+            0x0008_u32.to_le_bytes(),
+        ]
+        .concat();
+
+        let file_capabilities = FileCapabilities::parse(&raw_value).unwrap();
+        assert_eq!(file_capabilities.permitted(), CapSet::from_lo_hi(0x0400, 0));
+        assert_eq!(
+            file_capabilities.inheritable(),
+            CapSet::from_lo_hi(0x0008, 0)
+        );
+        assert!(file_capabilities.has_effective_flag());
+        assert_eq!(file_capabilities.root_uid(), None);
+    }
+}

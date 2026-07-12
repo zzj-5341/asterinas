@@ -5,6 +5,7 @@
 set -e
 
 ./capability/ambient
+./capability/alien_access
 ./capability/capabilities
 ./capability/capset
 ./capability/execve

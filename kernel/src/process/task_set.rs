@@ -163,3 +163,22 @@ impl TaskSet {
         &self.tasks[0]
     }
 }
+
+#[cfg(ktest)]
+mod tests {
+    use ostd::prelude::ktest;
+
+    use super::TaskSet;
+
+    #[ktest]
+    fn group_exit_is_recorded_during_recoverable_exec_attempt() {
+        let mut task_set = TaskSet::new();
+
+        task_set.start_execve_attempt();
+        task_set.set_exited_group();
+        task_set.finish_execve();
+
+        assert!(task_set.has_exited_group());
+        assert!(!task_set.execve_in_progress());
+    }
+}
