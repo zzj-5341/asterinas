@@ -22,7 +22,7 @@ mmap(
     fd, offset
 );
 
-// Create a shared memory mapping
+// Create a shared mapping; potentially writable mappings of live executables fail with ETXTBSY
 mmap(
     addr, length,
     prot = <prot>,

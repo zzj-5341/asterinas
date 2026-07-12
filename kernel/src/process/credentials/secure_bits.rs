@@ -142,4 +142,11 @@ impl AtomicSecureBits {
 
         Ok(())
     }
+
+    /// Clears `KEEP_CAPS` as part of an `execve()` transition.
+    pub(super) fn clear_keep_capabilities_on_exec(&self) {
+        let mut bits = self.inner.load(Ordering::Relaxed);
+        bits.remove(SecureBits::KEEP_CAPS);
+        self.inner.store(bits, Ordering::Relaxed);
+    }
 }

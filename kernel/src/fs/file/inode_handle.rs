@@ -25,6 +25,7 @@ use crate::{
     prelude::*,
     process::signal::{PollHandle, Pollable},
     util::ioctl::RawIoctl,
+    vm::page_cache::ExecWriteAccessGuard,
 };
 
 pub struct InodeHandle {
@@ -36,6 +37,8 @@ pub struct InodeHandle {
     offset: Mutex<usize>,
     status_flags: AtomicStatusFlags,
     rights: Rights,
+    /// Retains write access so executable mappings reject conflicting opens.
+    exec_write_access: Option<ExecWriteAccessGuard>,
 }
 
 impl InodeHandle {
@@ -57,6 +60,18 @@ impl InodeHandle {
         status_flags: StatusFlags,
     ) -> Result<Self> {
         let inode = path.inode();
+        let exec_write_access = if !status_flags.contains(StatusFlags::O_PATH)
+            && access_mode.is_writable()
+            && inode.type_() == InodeType::File
+            && inode.requires_exec_write_tracking()
+        {
+            inode
+                .page_cache_for_exec_write()?
+                .map(|page_cache| page_cache.acquire_exec_write_access())
+                .transpose()?
+        } else {
+            None
+        };
         let (open_file, rights) = if status_flags.contains(StatusFlags::O_PATH) {
             (None, Rights::empty())
         } else if inode.type_() == InodeType::Dir && access_mode.is_writable() {
@@ -73,6 +88,7 @@ impl InodeHandle {
             offset: Mutex::new(0),
             status_flags: AtomicStatusFlags::new(status_flags),
             rights,
+            exec_write_access,
         })
     }
 
@@ -279,11 +295,19 @@ impl FileLike for InodeHandle {
         if !self.rights.contains(Rights::WRITE) {
             return_errno_with_message!(Errno::EBADF, "the file is not opened writable");
         }
-
+        let inode = self.path.inode();
         let (file_ops, is_offset_aware) = self.file_ops_and_is_offset_aware();
         let status_flags = self.status_flags();
+        let mutation_guard = if reader.remain() > 0 && inode.type_() == InodeType::File {
+            Some(inode.lock_for_content_mutation()?)
+        } else {
+            None
+        };
 
         if !is_offset_aware {
+            if let Some(mutation_guard) = mutation_guard {
+                return mutation_guard.write_at(inode.as_ref(), file_ops, 0, reader, status_flags);
+            }
             return file_ops.write_at(0, reader, status_flags);
         }
 
@@ -296,7 +320,11 @@ impl FileLike for InodeHandle {
             *offset = self.path.size();
         }
 
-        let len = file_ops.write_at(*offset, reader, status_flags)?;
+        let len = if let Some(mutation_guard) = mutation_guard {
+            mutation_guard.write_at(inode.as_ref(), file_ops, *offset, reader, status_flags)?
+        } else {
+            file_ops.write_at(*offset, reader, status_flags)?
+        };
         *offset += len;
 
         Ok(len)
@@ -318,6 +346,12 @@ impl FileLike for InodeHandle {
         if !self.rights.contains(Rights::WRITE) {
             return_errno_with_message!(Errno::EBADF, "the file is not opened writable");
         }
+        let inode = self.path.inode();
+        let mutation_guard = if reader.remain() > 0 && inode.type_() == InodeType::File {
+            Some(inode.lock_for_content_mutation()?)
+        } else {
+            None
+        };
 
         let status_flags = self.status_flags();
 
@@ -327,6 +361,10 @@ impl FileLike for InodeHandle {
             // FIXME: `O_APPEND` should ensure that new content is appended even if another process
             // is writing to the file concurrently.
             offset = self.path.size();
+        }
+
+        if let Some(mutation_guard) = mutation_guard {
+            return mutation_guard.write_at(inode.as_ref(), file_ops, offset, reader, status_flags);
         }
 
         file_ops.write_at(offset, reader, status_flags)
@@ -350,7 +388,7 @@ impl FileLike for InodeHandle {
         }
 
         let inode = self.path.inode();
-        if let Some(ref page_cache) = inode.page_cache() {
+        if let Some(ref page_cache) = inode.page_cache_for_exec_write()? {
             // If the inode has a page cache, it is a file-backed mapping and
             // we return the VMO as the mappable object.
             Ok(Mappable::Vmo(page_cache.as_vmo().clone()))
@@ -375,7 +413,9 @@ impl FileLike for InodeHandle {
             // FIXME: It's allowed to `ftruncate` an append-only file on Linux.
             return_errno_with_message!(Errno::EPERM, "can not resize append-only file");
         }
-        self.path.inode().resize(new_size)
+        let inode = self.path.inode();
+        let mutation_guard = inode.lock_for_content_mutation()?;
+        mutation_guard.resize(inode.as_ref(), new_size)
     }
 
     fn status_flags(&self) -> StatusFlags {
@@ -464,7 +504,12 @@ impl FileLike for InodeHandle {
             );
         }
 
-        inode.fallocate(mode, offset, len)
+        if inode_type == InodeType::File {
+            let mutation_guard = inode.lock_for_content_mutation()?;
+            mutation_guard.fallocate(inode, mode, offset, len)
+        } else {
+            inode.fallocate(mode, offset, len)
+        }
     }
 
     fn path(&self) -> &Path {
@@ -512,6 +557,7 @@ impl Debug for InodeHandle {
             .field("offset", &self.offset())
             .field("status_flags", &self.status_flags())
             .field("rights", &self.rights)
+            .field("has_exec_write_access", &self.exec_write_access.is_some())
             .finish_non_exhaustive()
     }
 }

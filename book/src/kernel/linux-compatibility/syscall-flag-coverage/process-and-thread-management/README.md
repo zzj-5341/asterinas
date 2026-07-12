@@ -7,6 +7,40 @@ getpid, getppid, gettid, setuid, setgid, getuid, getgid, prctl and ptrace
 under this category.
 -->
 
+### `execve` and `execveat`
+
+Supported functionality in SCML:
+
+```c
+{{#include execve.scml}}
+```
+
+Executable files may carry Linux V1, V2, or V3 `security.capability` attributes.
+The file permitted, inheritable, and effective settings participate in the capability transition,
+and capability-bearing executables clear ambient capabilities.
+For interpreter scripts, capabilities on the script itself are ignored;
+the interpreter executable determines the credential transition.
+`MS_NOSUID` ignores file capabilities and set-ID bits.
+`no_new_privs` and an active ptrace relationship suppress privilege gains
+while retaining the privileged-file transition semantics.
+`AT_SECURE` is set when the final effective IDs differ from the real IDs,
+when execution changes effective IDs,
+or when a non-root execution requests file-effective capabilities
+or leaves permitted capabilities outside the ambient set.
+A suppressed file-capability gain can therefore still request secure userspace handling.
+Secure execution also clears a parent-death signal configured with `PR_SET_PDEATHSIG`.
+
+`execve` and `execveat` fail with `ETXTBSY`
+when a script, executable, or ELF interpreter is open for writing
+or has a potentially writable shared mapping.
+The main executable remains protected from writable opens and mappings for the life of the image;
+the ELF interpreter is protected only while it is being mapped.
+
+Namespaced V3 capabilities are currently limited to the initial user namespace mapping model.
+
+For more information,
+see [the capabilities man page](https://man7.org/linux/man-pages/man7/capabilities.7.html).
+
 ### `sched_getattr` and `sched_setattr`
 
 Supported functionality in SCML:

@@ -1,5 +1,5 @@
-// Allocate disk space within the range specified
+// Allocate disk space and invalidate file privilege metadata on success
 fallocate(fd, mode = FALLOC_FL_KEEP_SIZE, offset, size);
 
-// Deallocate space (create a hole) while keeping the file size unchanged
+// Deallocate space and invalidate file privilege metadata on success
 fallocate(fd, mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, size);

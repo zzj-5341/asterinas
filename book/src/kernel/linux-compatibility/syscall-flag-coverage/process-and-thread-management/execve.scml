@@ -1,0 +1,7 @@
+// Execute a program, including file capabilities and AT_SECURE transitions.
+// Secure execution clears PR_SET_PDEATHSIG state.
+// Writable access to a script, executable, or ELF interpreter causes ETXTBSY.
+execve(pathname, argv, envp);
+
+// Execute a program relative to a directory file descriptor with the same transitions
+execveat(dirfd, pathname, argv, envp, flags = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);

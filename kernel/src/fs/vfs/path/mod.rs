@@ -21,8 +21,10 @@ use crate::{
         },
         pseudofs::NsInode,
         vfs::{
+            file_privilege,
             file_system::{FileSystem, FsFlags},
             inode::{HardLinkability, Inode, Metadata, MknodType, RenameMode},
+            inode_ext::InodeExt,
             xattr::{XattrName, XattrNamespace, XattrSetFlags},
         },
     },
@@ -151,6 +153,10 @@ impl Path {
             );
         }
 
+        // Acquire writable-open access before truncation so a live executable
+        // rejects `O_TRUNC` without changing its contents or privilege metadata.
+        let inode_handle = InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)?;
+
         if inode_type.is_regular_file()
             && creation_flags.contains(CreationFlags::O_TRUNC)
             && !status_flags.contains(StatusFlags::O_PATH)
@@ -158,7 +164,7 @@ impl Path {
             self.resize(0)?;
         }
 
-        InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+        Ok(inode_handle)
     }
 
     /// Gets the parent `Path` within the same mount.
@@ -706,37 +712,80 @@ impl Path {
     pub fn sync_data(&self) -> Result<()>;
     pub fn metadata(&self) -> Metadata;
     pub fn mode(&self) -> Result<InodeMode>;
-    pub fn set_mode(&self, mode: InodeMode) -> Result<()>;
+    pub fn set_mode(&self, mode: InodeMode) -> Result<()> {
+        let inode = self.inode();
+        let _mutation_guard = inode.lock_for_mutation()?;
+        inode.set_mode(mode)
+    }
     pub fn size(&self) -> usize;
     pub fn owner(&self) -> Result<Uid>;
-    pub fn set_owner(&self, uid: Uid) -> Result<()>;
     pub fn group(&self) -> Result<Gid>;
-    pub fn set_group(&self, gid: Gid) -> Result<()>;
     pub fn atime(&self) -> Duration;
     pub fn set_atime(&self, time: Duration);
     pub fn mtime(&self) -> Duration;
     pub fn set_mtime(&self, time: Duration);
     pub fn ctime(&self) -> Duration;
     pub fn set_ctime(&self, time: Duration);
+
+    /// Changes ownership and clears privileges invalidated by the change.
+    pub fn chown(&self, uid: Option<Uid>, gid: Option<Gid>) -> Result<()> {
+        if uid.is_none() && gid.is_none() {
+            return Ok(());
+        }
+
+        let inode = self.inode();
+        let _mutation_guard = inode.lock_for_mutation()?;
+        file_privilege::invalidate_for_ownership_change(inode.as_ref())?;
+        if let Some(uid) = uid {
+            inode.set_owner(uid)?;
+        }
+        if let Some(gid) = gid {
+            inode.set_group(gid)?;
+        }
+        Ok(())
+    }
+
     pub fn set_xattr(
         &self,
         name: XattrName,
         value_reader: &mut VmReader,
         flags: XattrSetFlags,
-    ) -> Result<()>;
-    pub fn get_xattr(&self, name: XattrName, value_writer: &mut VmWriter) -> Result<usize>;
+    ) -> Result<()> {
+        let inode = self.inode();
+        inode.check_permission(Permission::MAY_WRITE)?;
+        let _mutation_guard = inode.lock_for_mutation()?;
+        inode.set_xattr(name, value_reader, flags)
+    }
+
+    pub fn get_xattr(&self, name: XattrName, value_writer: &mut VmWriter) -> Result<usize> {
+        let inode = self.inode();
+        inode.check_permission(Permission::MAY_READ)?;
+        inode.get_xattr(name, value_writer)
+    }
+
     pub fn list_xattr(
         &self,
         namespace: XattrNamespace,
         list_writer: &mut VmWriter,
-    ) -> Result<usize>;
-    pub fn remove_xattr(&self, name: XattrName) -> Result<()>;
+    ) -> Result<usize> {
+        let inode = self.inode();
+        inode.check_permission(Permission::MAY_ACCESS)?;
+        inode.list_xattr(namespace, list_writer)
+    }
+
+    pub fn remove_xattr(&self, name: XattrName) -> Result<()> {
+        let inode = self.inode();
+        inode.check_permission(Permission::MAY_WRITE)?;
+        let _mutation_guard = inode.lock_for_mutation()?;
+        inode.remove_xattr(name)
+    }
 
     /// Resizes the file.
     pub fn resize(&self, size: usize) -> Result<()> {
         let inode = self.inode();
         inode.check_permission(Permission::MAY_WRITE)?;
-        inode.resize(size)
+        let mutation_guard = inode.lock_for_content_mutation()?;
+        mutation_guard.resize(inode.as_ref(), size)
     }
 }
 

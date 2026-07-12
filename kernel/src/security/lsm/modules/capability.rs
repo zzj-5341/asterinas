@@ -50,9 +50,17 @@ impl LsmCapabilityHook for CapabilityLsm {
 impl LsmAlienAccessHook for CapabilityLsm {
     fn on_alien_access(&self, context: &AlienAccessContext) -> Result<()> {
         let accessor_cred = context.accessor().credentials();
-        let (caller_uid, caller_gid) = match context.mode().creds() {
-            CredsSource::FsCreds => (accessor_cred.fsuid(), accessor_cred.fsgid()),
-            CredsSource::RealCreds => (accessor_cred.ruid(), accessor_cred.rgid()),
+        let (caller_uid, caller_gid, caller_capset) = match context.mode().creds() {
+            CredsSource::FsCreds => (
+                accessor_cred.fsuid(),
+                accessor_cred.fsgid(),
+                accessor_cred.effective_capset(),
+            ),
+            CredsSource::RealCreds => (
+                accessor_cred.ruid(),
+                accessor_cred.rgid(),
+                accessor_cred.permitted_capset(),
+            ),
         };
 
         let target_cred = context.target().credentials();
@@ -62,7 +70,8 @@ impl LsmAlienAccessHook for CapabilityLsm {
             && caller_gid == target_cred.egid()
             && caller_gid == target_cred.sgid()
             && caller_gid == target_cred.rgid();
-        if caller_is_same || {
+        let caller_has_target_caps = caller_capset.contains(target_cred.permitted_capset());
+        if (caller_is_same && caller_has_target_caps) || {
             let target_process = context.target().process();
             let target_user_ns = target_process.user_ns().lock();
             self.on_capable(&CapableContext::new(

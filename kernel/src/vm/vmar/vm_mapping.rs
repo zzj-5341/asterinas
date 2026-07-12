@@ -27,7 +27,7 @@ use crate::{
     prelude::*,
     process::LockedHeap,
     vm::{
-        page_cache::{CachePage, Vmo, VmoCommitError},
+        page_cache::{CachePage, ExecWriteAccessGuard, PageCache, Vmo, VmoCommitError},
         perms::VmPerms,
         vmar::PageFaultInfo,
     },
@@ -855,8 +855,7 @@ impl MappedMemory {
     }
 }
 
-/// A wrapper that represents a mapped [`Vmo`] and provide required functionalities
-/// that need to be provided to mappings from the VMO.
+/// A mapped [`Vmo`] with the state required by virtual memory mappings.
 #[derive(Debug)]
 pub(super) struct MappedVmo {
     vmo: Arc<Vmo>,
@@ -865,11 +864,34 @@ pub(super) struct MappedVmo {
     /// Whether the VMO's writable mappings need to be tracked, and the
     /// mapping is writable to the VMO.
     is_writable_tracked: bool,
+    /// Retains file-write access while a shared mapping may become writable.
+    exec_write_access: Option<ExecWriteAccessGuard>,
+}
+
+/// The write-tracking mode for a file-backed mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MappedVmoWriteTracking {
+    Untracked,
+    ExecWrite,
+    ExecWriteAndWritableMapping,
 }
 
 impl MappedVmo {
     /// Creates a `MappedVmo` used for the mapping.
-    pub(super) fn new(vmo: Arc<Vmo>, offset: usize, is_writable_tracked: bool) -> Result<Self> {
+    pub(super) fn new(
+        vmo: Arc<Vmo>,
+        offset: usize,
+        write_tracking: MappedVmoWriteTracking,
+    ) -> Result<Self> {
+        let exec_write_access = match write_tracking {
+            MappedVmoWriteTracking::Untracked => None,
+            MappedVmoWriteTracking::ExecWrite
+            | MappedVmoWriteTracking::ExecWriteAndWritableMapping => {
+                Some(PageCache::from(vmo.clone()).acquire_exec_write_access()?)
+            }
+        };
+        let is_writable_tracked =
+            write_tracking == MappedVmoWriteTracking::ExecWriteAndWritableMapping;
         if is_writable_tracked {
             vmo.writable_mapping_status().map()?;
         }
@@ -878,6 +900,7 @@ impl MappedVmo {
             vmo,
             offset,
             is_writable_tracked,
+            exec_write_access,
         })
     }
 
@@ -956,6 +979,7 @@ impl MappedVmo {
             vmo: self.vmo.clone(),
             offset,
             is_writable_tracked: self.is_writable_tracked,
+            exec_write_access: self.exec_write_access.clone(),
         }
     }
 }

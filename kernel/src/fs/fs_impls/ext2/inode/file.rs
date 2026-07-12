@@ -12,6 +12,7 @@ use ostd::mm::io::util::HasVmReaderWriter;
 use super::{super::Ext2, FileFlags, Inode, InodeInner, io_range::IoRange};
 use crate::fs::{
     ext2::{prelude::*, utils},
+    file::StatusFlags,
     vfs::inode::FallocMode,
 };
 
@@ -109,8 +110,38 @@ impl Inode {
         inner.write_direct_at(&fs, offset, reader)
     }
 
-    /// Truncates or extends the file to `new_size` bytes.
-    pub(in crate::fs::fs_impls::ext2) fn resize(&self, new_size: usize) -> Result<()> {
+    /// Checks a write before privilege metadata is updated by the VFS.
+    pub(in crate::fs::fs_impls::ext2) fn prepare_write_at(
+        &self,
+        offset: usize,
+        len: usize,
+        status_flags: StatusFlags,
+    ) -> Result<usize> {
+        if self.type_ == InodeType::Dir {
+            return_errno!(Errno::EISDIR);
+        }
+        if len == 0 {
+            return Ok(0);
+        }
+        if status_flags.contains(StatusFlags::O_DIRECT)
+            && (!is_block_aligned(offset) || !is_block_aligned(len))
+        {
+            return_errno_with_message!(Errno::EINVAL, "not block-aligned");
+        }
+
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::with_message(Errno::EINVAL, "write range overflow"))?;
+        let fs = self.fs()?;
+        let inner = self.inner.read();
+        if end > inner.file_size() {
+            inner.ensure_size_within_limit(&fs, end)?;
+        }
+        Ok(len)
+    }
+
+    /// Checks a resize before privilege metadata is updated by the VFS.
+    pub(in crate::fs::fs_impls::ext2) fn check_resize(&self, new_size: usize) -> Result<()> {
         if self.type_ == InodeType::Dir {
             return_errno!(Errno::EISDIR);
         }
@@ -119,17 +150,16 @@ impl Inode {
         }
 
         let fs = self.fs()?;
+        self.inner.read().check_resize(&fs, new_size)
+    }
+
+    /// Truncates or extends the file to `new_size` bytes.
+    pub(in crate::fs::fs_impls::ext2) fn resize(&self, new_size: usize) -> Result<()> {
+        self.check_resize(new_size)?;
+
+        let fs = self.fs()?;
         let mut inner = self.inner.write();
-        if inner.is_fast_symlink() && inner.file_size() != 0 {
-            return_errno!(Errno::EINVAL);
-        }
-        if inner
-            .desc
-            .flags
-            .intersects(FileFlags::APPEND_ONLY | FileFlags::IMMUTABLE)
-        {
-            return_errno!(Errno::EPERM);
-        }
+        inner.check_resize(&fs, new_size)?;
 
         let old_size = inner.file_size();
         if new_size == old_size {
@@ -145,6 +175,31 @@ impl Inode {
         Ok(())
     }
 
+    /// Checks an ext2 fallocate operation before privilege metadata is updated.
+    pub(in crate::fs::fs_impls::ext2) fn check_fallocate(
+        &self,
+        mode: FallocMode,
+        offset: usize,
+        len: usize,
+    ) -> Result<()> {
+        if !matches!(mode, FallocMode::Allocate | FallocMode::AllocateKeepSize) {
+            return_errno_with_message!(
+                Errno::EOPNOTSUPP,
+                "fallocate with the specified flags is not supported"
+            );
+        }
+
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::with_message(Errno::EINVAL, "fallocate range overflow"))?;
+        let fs = self.fs()?;
+        let inner = self.inner.read();
+        if end > inner.file_size() {
+            inner.ensure_size_within_limit(&fs, end)?;
+        }
+        Ok(())
+    }
+
     /// Implements fallocate operations for ext2.
     pub(in crate::fs::fs_impls::ext2) fn fallocate(
         &self,
@@ -152,6 +207,7 @@ impl Inode {
         offset: usize,
         len: usize,
     ) -> Result<()> {
+        self.check_fallocate(mode, offset, len)?;
         if len == 0 {
             return Ok(());
         }
@@ -184,12 +240,7 @@ impl Inode {
                     return Err(err);
                 }
             }
-            _ => {
-                return_errno_with_message!(
-                    Errno::EOPNOTSUPP,
-                    "fallocate with the specified flags is not supported"
-                );
-            }
+            _ => unreachable!(),
         }
 
         inner.set_mtime_ctime(utils::now());
@@ -198,6 +249,23 @@ impl Inode {
 }
 
 impl InodeInner {
+    fn check_resize(&self, fs: &Ext2, new_size: usize) -> Result<()> {
+        if self.is_fast_symlink() && self.file_size() != 0 {
+            return_errno!(Errno::EINVAL);
+        }
+        if self
+            .desc
+            .flags
+            .intersects(FileFlags::APPEND_ONLY | FileFlags::IMMUTABLE)
+        {
+            return_errno!(Errno::EPERM);
+        }
+        if new_size > self.file_size() {
+            self.ensure_size_within_limit(fs, new_size)?;
+        }
+        Ok(())
+    }
+
     /// Prepares the inode for a write spanning `[offset, end)`.
     ///
     /// Expands the page cache if `end > file_size`, zeroes partial block

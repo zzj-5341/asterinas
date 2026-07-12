@@ -19,7 +19,7 @@ use super::{memfd::MemfdInode, xattr::RamXattr, *};
 use crate::{
     device::{self, DeviceType},
     fs::{
-        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, Permission, StatusFlags, mkmod},
+        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, StatusFlags, mkmod},
         pipe::Pipe,
         pseudofs::AnonDeviceId,
         tmpfs::{self, TMPFS_MAGIC},
@@ -1307,12 +1307,15 @@ impl Inode for RamInode {
     }
 
     fn fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()> {
-        // The support for flags is consistent with Linux
+        self.check_fallocate(mode, offset, len)?;
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::with_message(Errno::EINVAL, "fallocate range overflow"))?;
+
         match mode {
             FallocMode::Allocate => {
-                let new_size = offset + len;
-                if new_size > self.size() {
-                    self.resize(new_size)?;
+                if end > self.size() {
+                    self.resize(end)?;
                 }
                 Ok(())
             }
@@ -1325,17 +1328,29 @@ impl Inode for RamInode {
                 if offset >= file_size {
                     return Ok(());
                 }
-                let range = offset..file_size.min(offset + len);
+                let range = offset..file_size.min(end);
                 // TODO: Think of a more light-weight approach
                 self.inner.as_file().unwrap().lock().fill_zeros(range)
             }
-            _ => {
-                return_errno_with_message!(
-                    Errno::EOPNOTSUPP,
-                    "fallocate with the specified flags is not supported"
-                );
-            }
+            _ => unreachable!(),
         }
+    }
+
+    fn check_fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()> {
+        if !matches!(
+            mode,
+            FallocMode::Allocate | FallocMode::AllocateKeepSize | FallocMode::PunchHoleKeepSize
+        ) {
+            return_errno_with_message!(
+                Errno::EOPNOTSUPP,
+                "fallocate with the specified flags is not supported"
+            );
+        }
+
+        offset
+            .checked_add(len)
+            .ok_or_else(|| Error::with_message(Errno::EINVAL, "fallocate range overflow"))?;
+        Ok(())
     }
 
     fn extension(&self) -> &Extension {
@@ -1349,14 +1364,12 @@ impl Inode for RamInode {
         flags: XattrSetFlags,
     ) -> Result<()> {
         RamXattr::check_file_type_for_xattr(self.typ)?;
-        self.check_permission(Permission::MAY_WRITE)?;
         self.xattr.set(name, value_reader, flags)
     }
 
     fn get_xattr(&self, name: XattrName, value_writer: &mut VmWriter) -> Result<usize> {
         RamXattr::check_file_type_for_xattr(self.typ)
             .map_err(|_| Error::with_message(Errno::ENODATA, "no available xattrs"))?;
-        self.check_permission(Permission::MAY_READ)?;
         self.xattr.get(name, value_writer)
     }
 
@@ -1364,15 +1377,11 @@ impl Inode for RamInode {
         if RamXattr::check_file_type_for_xattr(self.typ).is_err() {
             return Ok(0);
         }
-        if self.check_permission(Permission::MAY_ACCESS).is_err() {
-            return Ok(0);
-        }
         self.xattr.list(namespace, list_writer)
     }
 
     fn remove_xattr(&self, name: XattrName) -> Result<()> {
         RamXattr::check_file_type_for_xattr(self.typ)?;
-        self.check_permission(Permission::MAY_WRITE)?;
         self.xattr.remove(name)
     }
 }

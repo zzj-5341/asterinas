@@ -8,7 +8,7 @@ use align_ext::AlignExt;
 use ostd::mm::{FrameAllocOptions, Segment};
 use xarray::XArray;
 
-use super::{Vmo, VmoFlags, WritableMappingStatus};
+use super::{ExecWriteStatus, Vmo, VmoFlags, WritableMappingStatus};
 use crate::{
     prelude::*,
     vm::page_cache::{CachePage, CachePageMeta, PageCacheBackend},
@@ -109,12 +109,14 @@ fn alloc_vmo(
     let size = size.align_up(PAGE_SIZE);
     let pages = committed_pages_if_continuous(flags, size)?;
     let writable_mapping_status = WritableMappingStatus::default();
+    let exec_write_status = ExecWriteStatus::default();
     Ok(Vmo {
         backend,
         flags,
         pages,
         size: AtomicUsize::new(size),
         writable_mapping_status,
+        exec_write_status,
     })
 }
 

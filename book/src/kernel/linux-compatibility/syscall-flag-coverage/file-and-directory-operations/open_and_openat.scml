@@ -2,6 +2,8 @@ access_mode =
     O_RDONLY |
     O_WRONLY |
     O_RDWR;
+// O_TRUNC invalidates file privilege metadata after successfully truncating a file.
+// Writable opens of a live executable image fail with ETXTBSY before truncation.
 creation_flags =
     O_CLOEXEC |
     O_DIRECTORY |

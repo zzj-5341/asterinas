@@ -24,7 +24,7 @@ use super::{
     interval_set::{Interval, IntervalSet},
     is_userspace_vaddr,
     util::{self, get_intersected_range},
-    vm_mapping::{MappedMemory, MappedVmo, VmMapping},
+    vm_mapping::{MappedMemory, MappedVmo, MappedVmoWriteTracking, VmMapping},
 };
 use crate::{
     prelude::*,

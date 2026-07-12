@@ -14,7 +14,7 @@ use crate::{
     process::{
         Credentials, ProcessVm, UserNamespace, pid_table,
         posix_thread::{PosixThreadBuilder, ThreadName, allocate_posix_tid},
-        program_loader::ProgramToLoad,
+        program_loader::{ExecSecurity, PreparedProgramToLoad},
         rlimit::new_resource_limits_for_init,
         signal::sig_disposition::SigDispositions,
     },
@@ -148,9 +148,9 @@ fn create_init_task(
         let path_resolver = fs.resolver().read();
 
         let program_to_load =
-            ProgramToLoad::build_from_file(elf_path.clone(), &path_resolver, argv, envp)?;
+            PreparedProgramToLoad::build_from_file(elf_path.clone(), &path_resolver, argv, envp)?;
         let vmar = process.lock_vmar();
-        let elf_load_info = program_to_load.load_to_vmar(vmar.unwrap(), &path_resolver)?;
+        let elf_load_info = program_to_load.load_to_vmar(vmar.unwrap(), ExecSecurity::Ordinary)?;
         let elf_abs_path = path_resolver.make_abs_path(&elf_path).into_string();
 
         (elf_load_info, elf_abs_path)
