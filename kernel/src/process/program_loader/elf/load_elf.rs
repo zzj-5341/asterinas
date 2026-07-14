@@ -5,7 +5,6 @@
 use core::ops::Range;
 
 use align_ext::AlignExt;
-use ostd::task::Task;
 
 use super::{
     elf_file::{ElfHeaders, LoadablePhdr},
@@ -15,9 +14,8 @@ use crate::{
     fs::vfs::path::{FsPath, Path, PathResolver},
     prelude::*,
     process::{
-        posix_thread::AsPosixThread,
         process_vm::{AuxKey, AuxVec},
-        program_loader::check_executable_inode,
+        program_loader::ExecSecurity,
     },
     util::random::getrandom,
     vm::{
@@ -52,19 +50,18 @@ pub struct ElfLoadInfo {
 pub fn load_elf_to_vmar(
     vmar: &Vmar,
     elf_file: Path,
-    path_resolver: &PathResolver,
     elf_headers: ElfHeaders,
+    ldso: Option<(Path, ElfHeaders)>,
     argv: Vec<CString>,
     envp: Vec<CString>,
+    exec_security: ExecSecurity,
 ) -> Result<ElfLoadInfo> {
-    let ldso = lookup_and_parse_ldso(&elf_headers, &elf_file, path_resolver)?;
-
     #[cfg_attr(
         not(any(target_arch = "x86_64", target_arch = "riscv64")),
         expect(unused_mut)
     )]
     let (elf_mapped_info, entry_point, mut aux_vec) =
-        map_vmos_and_build_aux_vec(vmar, ldso, &elf_headers, &elf_file)?;
+        map_vmos_and_build_aux_vec(vmar, ldso, &elf_headers, &elf_file, exec_security)?;
     vmar.process_vm()
         .set_code_range(elf_mapped_info.code_range.clone());
     vmar.process_vm()
@@ -95,45 +92,40 @@ pub fn load_elf_to_vmar(
     })
 }
 
-fn lookup_and_parse_ldso(
+pub(in crate::process::program_loader) fn lookup_ldso(
     headers: &ElfHeaders,
     elf_file: &Path,
     path_resolver: &PathResolver,
-) -> Result<Option<(Path, ElfHeaders)>> {
-    let ldso_file = {
-        let ldso_path = if let Some(interp_phdr) = headers.interp_phdr() {
-            interp_phdr.read_ldso_path(elf_file.inode())?
-        } else {
-            return Ok(None);
-        };
-
-        // Our FS requires the path to be valid UTF-8. This may be too restrictive.
-        let ldso_path = ldso_path.into_string().map_err(|_| {
-            Error::with_message(
-                Errno::ENOEXEC,
-                "the interpreter path is not a valid UTF-8 string",
-            )
-        })?;
-
-        let fs_path = FsPath::try_from(ldso_path.as_str())?;
-        path_resolver.lookup(&fs_path)?
+) -> Result<Option<Path>> {
+    let Some(interp_phdr) = headers.interp_phdr() else {
+        return Ok(None);
     };
+    let ldso_path = interp_phdr.read_ldso_path(elf_file.inode())?;
 
-    let ldso_elf = {
-        let inode = ldso_file.inode();
-        check_executable_inode(inode.as_ref())?;
+    // Our FS requires the path to be valid UTF-8. This may be too restrictive.
+    let ldso_path = ldso_path.into_string().map_err(|_| {
+        Error::with_message(
+            Errno::ENOEXEC,
+            "the interpreter path is not a valid UTF-8 string",
+        )
+    })?;
 
-        let mut buf = Box::new([0u8; PAGE_SIZE]);
-        let len = inode.read_bytes_at(0, &mut *buf)?;
-        if len < ElfHeaders::LEN {
-            return_errno_with_message!(Errno::EIO, "the interpreter format is invalid");
-        }
+    let fs_path = FsPath::try_from(ldso_path.as_str())?;
+    path_resolver.lookup(&fs_path).map(Some)
+}
 
-        ElfHeaders::parse(&buf[..len])
-            .map_err(|_| Error::with_message(Errno::ELIBBAD, "the interpreter format is invalid"))?
-    };
+pub(in crate::process::program_loader) fn parse_ldso_headers(
+    ldso_file: &Path,
+) -> Result<ElfHeaders> {
+    let inode = ldso_file.inode();
+    let mut buf = Box::new([0u8; PAGE_SIZE]);
+    let len = inode.read_bytes_at(0, &mut *buf)?;
+    if len < ElfHeaders::LEN {
+        return_errno_with_message!(Errno::EIO, "the interpreter format is invalid");
+    }
 
-    Ok(Some((ldso_file, ldso_elf)))
+    ElfHeaders::parse(&buf[..len])
+        .map_err(|_| Error::with_message(Errno::ELIBBAD, "the interpreter format is invalid"))
 }
 
 /// Maps the VMOs to the corresponding virtual memory addresses and builds the auxiliary vector.
@@ -144,6 +136,7 @@ fn map_vmos_and_build_aux_vec(
     ldso: Option<(Path, ElfHeaders)>,
     parsed_elf: &ElfHeaders,
     elf_file: &Path,
+    exec_security: ExecSecurity,
 ) -> Result<(ElfMappedInfo, Vaddr, AuxVec)> {
     let ldso_load_info = if let Some((ldso_file, ldso_elf)) = ldso {
         Some(load_ldso(vmar, &ldso_file, &ldso_elf)?)
@@ -160,21 +153,7 @@ fn map_vmos_and_build_aux_vec(
         init_aux_vec(parsed_elf, &elf_mapped_info.full_range, ldso_base)?
     };
 
-    // Set AT_SECURE based on setuid/setgid bits and `no_new_privs`.
-    //
-    // FIXME: We should fetch the setuid/setgid bits and `no_new_privs` from
-    // the execve entry and pass them here, rather than re-fetching them here.
-    let mode = elf_file.inode().mode()?;
-    let secure = if mode.has_set_uid() || mode.has_set_gid() {
-        let task = Task::current().unwrap();
-        match task.as_posix_thread() {
-            Some(posix_thread) if !posix_thread.credentials().no_new_privs() => 1,
-            _ => 0,
-        }
-    } else {
-        0
-    };
-    aux_vec.set(AuxKey::AT_SECURE, secure);
+    aux_vec.set(AuxKey::AT_SECURE, exec_security.aux_value());
 
     let entry_point = if let Some(ldso_load_info) = ldso_load_info {
         ldso_load_info.entry_point

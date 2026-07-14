@@ -98,6 +98,42 @@ mod vmo;
 pub use cache_page::{CachePage, CachePageExt, CachePageMeta, LockedCachePage};
 pub use vmo::{Vmo, VmoCommitError, VmoFlags, VmoOptions, WritableMappingStatus};
 
+/// A write access to a file-backed page cache.
+#[derive(Debug)]
+pub struct ExecWriteAccessGuard(PageCache);
+
+impl Clone for ExecWriteAccessGuard {
+    fn clone(&self) -> Self {
+        self.0
+            .0
+            .exec_write_status()
+            .acquire()
+            .expect("an existing write access keeps executable denials away");
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for ExecWriteAccessGuard {
+    fn drop(&mut self) {
+        self.0.0.exec_write_status().release();
+    }
+}
+
+/// A write denial retained while a page cache backs an executable image.
+#[derive(Clone, Debug)]
+pub struct ExecWriteDenialGuard {
+    _reservation: Arc<ExecWriteDenialReservation>,
+}
+
+#[derive(Debug)]
+struct ExecWriteDenialReservation(PageCache);
+
+impl Drop for ExecWriteDenialReservation {
+    fn drop(&mut self) {
+        self.0.0.exec_write_status().allow();
+    }
+}
+
 /// The page cache for a file-like object.
 ///
 /// This is the abstraction a filesystem usually stores in an inode: it handles
@@ -159,6 +195,20 @@ impl PageCache {
     /// Returns the writable mapping status of the underlying VMO.
     pub fn writable_mapping_status(&self) -> &WritableMappingStatus {
         self.0.writable_mapping_status()
+    }
+
+    /// Acquires write access unless the page cache backs an executable image.
+    pub fn acquire_exec_write_access(&self) -> Result<ExecWriteAccessGuard> {
+        self.0.exec_write_status().acquire()?;
+        Ok(ExecWriteAccessGuard(self.clone()))
+    }
+
+    /// Denies write access while the page cache backs an executable image.
+    pub fn deny_exec_write_access(&self) -> Result<ExecWriteDenialGuard> {
+        self.0.exec_write_status().deny()?;
+        Ok(ExecWriteDenialGuard {
+            _reservation: Arc::new(ExecWriteDenialReservation(self.clone())),
+        })
     }
 
     /// Resizes the page-cache capacity to cover a new file size.

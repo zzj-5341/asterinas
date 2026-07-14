@@ -208,21 +208,31 @@ static int access_from_sibling(int drop_cap, int switch_user)
 {
 	int pipe_block[2];
 	CHECK(pipe(pipe_block));
+	int pipe_ready[2];
+	CHECK(pipe(pipe_ready));
 
 	pid_t target = CHECK(fork());
 	if (target == 0) {
 		CHECK(close(pipe_block[1]));
+		CHECK(close(pipe_ready[0]));
 		if (drop_cap) {
 			// Keep the target capability same with the accessor,
 			// to pass Linux commoncap checks.
 			drop_capability(CAP_SYS_PTRACE);
 		}
+		CHECK_WITH(write(pipe_ready[1], "R", 1), _ret == 1);
+		CHECK(close(pipe_ready[1]));
 		char ch;
 		CHECK(read(pipe_block[0], &ch, 1));
 		CHECK(close(pipe_block[0]));
 		exit(EXIT_SUCCESS);
 	}
 	CHECK(close(pipe_block[0]));
+	CHECK(close(pipe_ready[1]));
+	// Ensure both children inherit the same capability sets.
+	char ready;
+	CHECK_WITH(read(pipe_ready[0], &ready, 1), _ret == 1);
+	CHECK(close(pipe_ready[0]));
 
 	int pipe_res[2];
 	CHECK(pipe(pipe_res));

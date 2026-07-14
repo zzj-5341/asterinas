@@ -2,10 +2,7 @@
 
 use super::{
     SyscallReturn,
-    setxattr::{
-        XattrFileCtx, check_xattr_namespace, lookup_path_for_xattr, parse_xattr_name,
-        read_xattr_name_cstr_from_user,
-    },
+    setxattr::{self, XattrFileCtx},
 };
 use crate::{
     fs,
@@ -52,12 +49,13 @@ fn removexattr(
     user_space: &CurrentUserSpace,
     ctx: &Context,
 ) -> Result<()> {
-    let name_cstr = read_xattr_name_cstr_from_user(name_ptr, user_space)?;
+    let name_cstr = setxattr::read_xattr_name_cstr_from_user(name_ptr, user_space)?;
     let name_str = name_cstr.to_string_lossy();
-    let xattr_name = parse_xattr_name(name_str.as_ref())?;
-    check_xattr_namespace(xattr_name.namespace(), ctx)?;
+    let xattr_name = setxattr::parse_xattr_name(name_str.as_ref())?;
+    setxattr::check_xattr_namespace(xattr_name.namespace(), ctx)?;
+    setxattr::check_file_cap_permission(&xattr_name, ctx)?;
 
-    match lookup_path_for_xattr(&file_ctx, ctx) {
+    match setxattr::lookup_path_for_xattr(&file_ctx, ctx) {
         Ok(path) => {
             path.remove_xattr(xattr_name)?;
             fs::vfs::notify::on_attr_change(&path);

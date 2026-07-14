@@ -12,16 +12,18 @@ use ostd::{
 
 use super::process_vm::activate_vmar;
 use crate::{
-    fs::vfs::{inode::Inode, path::Path},
+    fs::vfs::path::{Path, PerMountFlags},
     prelude::*,
     process::{
-        ContextUnshareAdminApi, Credentials, Gid, Process, Uid, pid_table,
+        ContextUnshareAdminApi, Credentials, Process,
+        credentials::{ExecCred, ExecPrivilegePolicy, FileCapabilities},
+        pid_table,
         posix_thread::{
             AsPosixThread, ContextPthreadAdminApi, ThreadLocal, ThreadName, ptrace::PtraceEvent,
             sigkill_other_threads,
         },
         process_vm::{MAX_LEN_STRING_ARG, MAX_NR_STRING_ARGS, ProcessVm},
-        program_loader::{ProgramToLoad, elf::ElfLoadInfo},
+        program_loader::{ExecSecurity, PreparedProgramToLoad, elf::ElfLoadInfo},
         signal::{
             HandlePendingSignal, PauseReason, SigStack,
             constants::{SIGCHLD, SIGKILL},
@@ -31,6 +33,42 @@ use crate::{
     vm::vmar::VmarHandle,
 };
 
+struct ExecveAttemptGuard<'a> {
+    process: &'a Process,
+}
+
+impl<'a> ExecveAttemptGuard<'a> {
+    fn start(process: &'a Process) -> Result<Self> {
+        let mut task_set = process.tasks().lock();
+        if task_set.has_exited_group() || task_set.execve_in_progress() {
+            return_errno_with_message!(
+                Errno::EAGAIN,
+                "the process has exited or is already executing a new program"
+            );
+        }
+        task_set.start_execve_attempt();
+        Ok(Self { process })
+    }
+
+    fn enter_commit(&mut self) -> Result<()> {
+        let mut task_set = self.process.tasks().lock();
+        if task_set.has_exited_group() {
+            return_errno_with_message!(
+                Errno::EAGAIN,
+                "the process exited while preparing a new program"
+            );
+        }
+        task_set.start_execve_commit();
+        Ok(())
+    }
+}
+
+impl Drop for ExecveAttemptGuard<'_> {
+    fn drop(&mut self) {
+        self.process.tasks().lock().finish_execve();
+    }
+}
+
 pub fn do_execve(
     elf_file: Path,
     thread_name: ThreadName,
@@ -39,6 +77,8 @@ pub fn do_execve(
     ctx: &Context,
     user_context: &mut UserContext,
 ) -> Result<()> {
+    let mut execve_attempt_guard = ExecveAttemptGuard::start(&ctx.process)?;
+
     // FIXME: A malicious user could cause a kernel panic by exhausting available memory.
     // Currently, the implementation reads up to `MAX_NR_STRING_ARGS` arguments, each up to
     // `MAX_LEN_STRING_ARG` in length, without first verifying the total combined size.
@@ -57,24 +97,24 @@ pub fn do_execve(
         envp
     );
 
-    let program_to_load =
-        ProgramToLoad::build_from_file(elf_file.clone(), &path_resolver, argv, envp)?;
+    let prepared_program =
+        PreparedProgramToLoad::build_from_file(elf_file.clone(), &path_resolver, argv, envp)?;
+    let exec_cred = prepare_exec_cred(prepared_program.elf_file(), ctx)?;
+    let exec_security = if exec_cred.is_secure_exec() {
+        ExecSecurity::Secure
+    } else {
+        ExecSecurity::Ordinary
+    };
 
     let new_vmar = VmarHandle::new(ProcessVm::new(elf_file.clone()));
-    let elf_load_info = program_to_load.load_to_vmar(&new_vmar, &path_resolver)?;
+    let elf_load_info = prepared_program.load_to_vmar(&new_vmar, exec_security)?;
 
-    // Ensure no other thread is concurrently performing exit_group or execve.
-    // If such an operation is in progress, return EAGAIN.
-    let mut task_set = ctx.process.tasks().lock();
-    if task_set.has_exited_group() || task_set.in_execve() {
-        return_errno_with_message!(
-            Errno::EAGAIN,
-            "the process has exited or has already executed a new program"
-        );
-    }
-    task_set.start_execve();
+    // Enter the no-return phase only after every operation that can fail
+    // without destroying the old process image has completed.
+    execve_attempt_guard.enter_commit()?;
 
     // Terminate all other threads
+    let task_set = ctx.process.tasks().lock();
     sigkill_other_threads(ctx.task, &task_set);
     drop(task_set);
 
@@ -86,12 +126,11 @@ pub fn do_execve(
     let res = do_execve_no_return(
         ctx,
         user_context,
-        elf_file,
         thread_name,
         new_vmar,
         &elf_load_info,
+        exec_cred,
     );
-
     if res.is_ok() {
         ctx.posix_thread
             .ptrace_may_stop_on(PtraceEvent::Exec(former_tid), ctx, user_context);
@@ -100,7 +139,7 @@ pub fn do_execve(
             .enqueue_signal(Box::new(KernelSignal::new(SIGKILL)));
     }
 
-    ctx.process.tasks().lock().finish_execve();
+    drop(execve_attempt_guard);
 
     res
 }
@@ -143,13 +182,55 @@ fn read_cstring_vec(
     return_errno_with_message!(Errno::E2BIG, "there are too many arguments");
 }
 
+/// Prepares credential changes before `execve()` failures become fatal.
+fn prepare_exec_cred(elf_file: &Path, ctx: &Context) -> Result<ExecCred> {
+    let credentials = ctx.posix_thread.credentials();
+    let privilege_policy = if credentials.no_new_privs() || ctx.posix_thread.is_traced() {
+        ExecPrivilegePolicy::Suppress
+    } else {
+        ExecPrivilegePolicy::Honor
+    };
+    if elf_file
+        .mount_node()
+        .flags()
+        .contains(PerMountFlags::NOSUID)
+    {
+        return credentials.prepare_exec_cred(None, None, None, privilege_policy);
+    }
+
+    // FIXME: When creating new user namespaces is supported, compare file capability
+    // root IDs against the current namespace owner UID mapped into the initial user namespace.
+    let current_user_ns_owner_uid = ctx.thread_local.borrow_user_ns().owner_uid()?;
+    let file_capabilities =
+        FileCapabilities::read_from_inode(elf_file.inode().as_ref())?.filter(|file_capabilities| {
+            file_capabilities
+                .root_uid()
+                .map_or(current_user_ns_owner_uid.is_root(), |root_uid| {
+                    root_uid == current_user_ns_owner_uid
+                })
+        });
+    let elf_mode = elf_file.mode()?;
+    let setuid = if elf_mode.has_set_uid() {
+        Some(elf_file.owner()?)
+    } else {
+        None
+    };
+    let setgid = if elf_mode.has_set_gid() {
+        Some(elf_file.group()?)
+    } else {
+        None
+    };
+
+    credentials.prepare_exec_cred(file_capabilities, setuid, setgid, privilege_policy)
+}
+
 fn do_execve_no_return(
     ctx: &Context,
     user_context: &mut UserContext,
-    elf_file: Path,
     thread_name: ThreadName,
     new_vmar: VmarHandle,
     elf_load_info: &ElfLoadInfo,
+    exec_cred: ExecCred,
 ) -> Result<()> {
     let Context {
         process,
@@ -168,7 +249,7 @@ fn do_execve_no_return(
     // This prevents race conditions when checking access permissions while opening
     // `/proc/[pid]/mem` or `/proc/[pid]/maps`.
     let (vmar_guard, old_vmar) = activate_vmar(ctx, new_vmar);
-    apply_caps_from_exec(process, ctx.credentials_mut(), elf_file.inode())?;
+    apply_exec_cred(process, &ctx.credentials_mut(), exec_cred);
     drop(vmar_guard);
     drop(old_vmar);
 
@@ -303,67 +384,12 @@ fn set_cpu_context(
     debug!("user stack top: 0x{:x}", elf_load_info.user_stack_top);
 }
 
-/// Sets the UID and GID in the credentials according to the ELF inode.
-///
-/// The capabilities will be updated accordingly.
-fn apply_caps_from_exec(
-    process: &Process,
-    credentials: Credentials<ReadWriteOp>,
-    elf_inode: &Arc<dyn Inode>,
-) -> Result<()> {
-    let mode = elf_inode.mode()?;
-    let no_new_privs = credentials.no_new_privs();
-    let set_uid = if mode.has_set_uid() && !no_new_privs {
-        Some(elf_inode.owner()?)
-    } else {
-        None
-    };
-    let set_gid = if mode.has_set_gid() && !no_new_privs {
-        Some(elf_inode.group()?)
-    } else {
-        None
-    };
-
-    // Clear the ambient capability set when executing a privileged file.
-    // Currently, only setuid/setgid files are considered privileged.
-    // TODO: Also clear ambient capabilities when executing files with file capabilities
-    // (security.capability xattr) once file capabilities are supported.
-    if set_uid.is_some() || set_gid.is_some() {
-        credentials.clear_ambient_capset();
+/// Applies credentials prepared before the no-return point of `execve()`.
+fn apply_exec_cred(process: &Process, credentials: &Credentials<ReadWriteOp>, exec_cred: ExecCred) {
+    if exec_cred.is_secure_exec() {
+        process.clear_parent_death_signal();
     }
-    apply_set_uid(process, &credentials, set_uid);
-    apply_set_gid(process, &credentials, set_gid);
-    credentials.set_keep_capabilities(false)?;
-
-    Ok(())
-}
-
-/// Applies the set-user-ID effect to the credentials.
-///
-/// If `set_uid` is `Some`, the effective UID is set to the given UID.
-fn apply_set_uid(current: &Process, credentials: &Credentials<ReadWriteOp>, set_uid: Option<Uid>) {
-    if let Some(owner) = set_uid {
-        credentials.set_euid(owner);
-
-        current.clear_parent_death_signal();
-    }
-
-    // No matter whether the file has the set-user-ID bit, SUID should be reset.
-    credentials.reset_suid();
-}
-
-/// Applies the set-group-ID effect to the credentials.
-///
-/// If `set_gid` is `Some`, the effective GID is set to the given GID.
-fn apply_set_gid(current: &Process, credentials: &Credentials<ReadWriteOp>, set_gid: Option<Gid>) {
-    if let Some(group) = set_gid {
-        credentials.set_egid(group);
-
-        current.clear_parent_death_signal();
-    }
-
-    // No matter whether the file has the set-group-ID bit, SGID should be reset.
-    credentials.reset_sgid();
+    credentials.apply_exec_cred(exec_cred);
 }
 
 fn reset_vfork_child(process: &Process) {

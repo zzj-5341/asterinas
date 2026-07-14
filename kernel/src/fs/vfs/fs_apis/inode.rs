@@ -346,6 +346,18 @@ pub trait FileOps {
         status_flags: StatusFlags,
     ) -> Result<usize>;
 
+    /// Checks a write before the VFS updates privilege metadata.
+    ///
+    /// Returns the maximum number of bytes that the write may consume.
+    fn prepare_write_at(
+        &self,
+        _offset: usize,
+        len: usize,
+        _status_flags: StatusFlags,
+    ) -> Result<usize> {
+        Ok(len)
+    }
+
     /// Reads directory entries from the given offset.
     fn readdir_at(&self, _offset: usize, _visitor: &mut dyn DirentVisitor) -> Result<usize> {
         return_errno_with_message!(Errno::ENOTDIR, "readdir is not supported");
@@ -356,6 +368,11 @@ pub trait Inode: Any + FileOps + Send + Sync {
     fn size(&self) -> usize;
 
     fn resize(&self, new_size: usize) -> Result<()>;
+
+    /// Checks a resize before the VFS updates privilege metadata.
+    fn check_resize(&self, _new_size: usize) -> Result<()> {
+        Ok(())
+    }
 
     fn metadata(&self) -> Metadata;
 
@@ -389,6 +406,22 @@ pub trait Inode: Any + FileOps + Send + Sync {
 
     fn page_cache(&self) -> Option<PageCache> {
         None
+    }
+
+    /// Returns the page cache used to coordinate executable and writable access.
+    ///
+    /// Filesystems that must perform fallible preparation before exposing their
+    /// page cache should override this method.
+    fn page_cache_for_exec_write(&self) -> Result<Option<PageCache>> {
+        Ok(self.page_cache())
+    }
+
+    /// Returns whether file writes must be tracked against executable access.
+    ///
+    /// Implementations may return `false` only when content changes are impossible.
+    /// Once this returns `false` for an inode, it must never return `true` again.
+    fn requires_exec_write_tracking(&self) -> bool {
+        true
     }
 
     fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
@@ -460,6 +493,11 @@ pub trait Inode: Any + FileOps + Send + Sync {
     /// Manipulates a range of space of the file according to the specified allocate mode,
     /// the manipulated range starts at `offset` and continues for `len` bytes.
     fn fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()> {
+        return_errno!(Errno::EOPNOTSUPP);
+    }
+
+    /// Checks an allocation operation before the VFS updates privilege metadata.
+    fn check_fallocate(&self, _mode: FallocMode, _offset: usize, _len: usize) -> Result<()> {
         return_errno!(Errno::EOPNOTSUPP);
     }
 

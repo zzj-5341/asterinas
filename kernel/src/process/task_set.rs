@@ -14,8 +14,15 @@ pub struct TaskSet {
     tasks: Vec<Arc<Task>>,
     has_exited_main: bool,
     has_exited_group: bool,
-    in_execve: bool,
+    execve_phase: ExecvePhase,
     execve_waker: Option<Arc<Waker>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecvePhase {
+    Idle,
+    Preparing,
+    Committing,
 }
 
 impl TaskSet {
@@ -25,17 +32,16 @@ impl TaskSet {
             tasks: Vec::new(),
             has_exited_main: false,
             has_exited_group: false,
-            in_execve: false,
+            execve_phase: ExecvePhase::Idle,
             execve_waker: None,
         }
     }
 
     /// Inserts a new task to the task set.
     ///
-    /// This method will fail if [`Self::set_exited_group`] or [`Self::start_execve`]
-    /// has been called before.
+    /// This method will fail after a group exit or an exec attempt starts.
     pub(super) fn insert(&mut self, task: Arc<Task>) -> Result<(), Arc<Task>> {
-        if self.has_exited_group || self.in_execve {
+        if self.has_exited_group || self.execve_phase != ExecvePhase::Idle {
             return Err(task);
         }
 
@@ -92,7 +98,7 @@ impl TaskSet {
 
     /// Sets a flag that denotes that an `exit_group` has been initiated.
     pub(super) fn set_exited_group(&mut self) {
-        debug_assert!(!self.in_execve);
+        debug_assert_ne!(self.execve_phase, ExecvePhase::Committing);
         self.has_exited_group = true;
     }
 
@@ -101,20 +107,34 @@ impl TaskSet {
         self.has_exited_group
     }
 
-    /// Sets a flag that denotes that an `execve` has been initiated.
-    pub(super) fn start_execve(&mut self) {
+    /// Starts the recoverable preparation phase of an `execve()` call.
+    pub(super) fn start_execve_attempt(&mut self) {
         debug_assert!(!self.has_exited_group);
-        self.in_execve = true;
+        debug_assert_eq!(self.execve_phase, ExecvePhase::Idle);
+        self.execve_phase = ExecvePhase::Preparing;
     }
 
-    /// Resets a flag to indicate an `execve` has finished.
+    /// Enters the no-return phase of an `execve()` call.
+    pub(super) fn start_execve_commit(&mut self) {
+        debug_assert!(!self.has_exited_group);
+        debug_assert_eq!(self.execve_phase, ExecvePhase::Preparing);
+        self.execve_phase = ExecvePhase::Committing;
+    }
+
+    /// Finishes an `execve()` call.
     pub(super) fn finish_execve(&mut self) {
-        self.in_execve = false;
+        debug_assert_ne!(self.execve_phase, ExecvePhase::Idle);
+        self.execve_phase = ExecvePhase::Idle;
     }
 
-    /// Returns whether an `execve` has been initiated.
+    /// Returns whether an `execve()` call is in progress.
+    pub(super) fn execve_in_progress(&self) -> bool {
+        self.execve_phase != ExecvePhase::Idle
+    }
+
+    /// Returns whether an `execve()` call is in its no-return phase.
     pub(super) fn in_execve(&self) -> bool {
-        self.in_execve
+        self.execve_phase == ExecvePhase::Committing
     }
 
     /// Registers a waker to be notified when any thread exits.
@@ -141,5 +161,24 @@ impl TaskSet {
     /// Returns the main task/thread.
     pub fn main(&self) -> &Arc<Task> {
         &self.tasks[0]
+    }
+}
+
+#[cfg(ktest)]
+mod tests {
+    use ostd::prelude::ktest;
+
+    use super::TaskSet;
+
+    #[ktest]
+    fn group_exit_is_recorded_during_recoverable_exec_attempt() {
+        let mut task_set = TaskSet::new();
+
+        task_set.start_execve_attempt();
+        task_set.set_exited_group();
+        task_set.finish_execve();
+
+        assert!(task_set.has_exited_group());
+        assert!(!task_set.execve_in_progress());
     }
 }

@@ -15,7 +15,7 @@ use device_id::DeviceId;
 use crate::{
     device,
     fs::{
-        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, Permission, StatusFlags},
+        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, StatusFlags},
         fs_impls::ext2::{FilePerm, Inode as Ext2Inode},
         utils::DirentVisitor,
         vfs::{
@@ -59,6 +59,15 @@ impl FileOps for Ext2Inode {
         }
     }
 
+    fn prepare_write_at(
+        &self,
+        offset: usize,
+        len: usize,
+        status_flags: StatusFlags,
+    ) -> Result<usize> {
+        self.prepare_write_at(offset, len, status_flags)
+    }
+
     fn readdir_at(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize> {
         self.readdir_at(offset, visitor)
     }
@@ -71,6 +80,10 @@ impl Inode for Ext2Inode {
 
     fn resize(&self, new_size: usize) -> Result<()> {
         self.resize(new_size)
+    }
+
+    fn check_resize(&self, new_size: usize) -> Result<()> {
+        self.check_resize(new_size)
     }
 
     fn metadata(&self) -> Metadata {
@@ -261,6 +274,10 @@ impl Inode for Ext2Inode {
         self.fallocate(mode, offset, len)
     }
 
+    fn check_fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()> {
+        self.check_fallocate(mode, offset, len)
+    }
+
     fn fs(&self) -> Arc<dyn FileSystem> {
         // The inode must belong to a live filesystem instance.
         self.fs().unwrap()
@@ -276,22 +293,18 @@ impl Inode for Ext2Inode {
         value_reader: &mut VmReader,
         flags: XattrSetFlags,
     ) -> Result<()> {
-        self.check_permission(Permission::MAY_WRITE)?;
         self.set_xattr(name, value_reader, flags)
     }
 
     fn get_xattr(&self, name: XattrName, value_writer: &mut VmWriter) -> Result<usize> {
-        self.check_permission(Permission::MAY_READ)?;
         self.get_xattr(name, value_writer)
     }
 
     fn list_xattr(&self, namespace: XattrNamespace, list_writer: &mut VmWriter) -> Result<usize> {
-        self.check_permission(Permission::MAY_ACCESS)?;
         self.list_xattr(namespace, list_writer)
     }
 
     fn remove_xattr(&self, name: XattrName) -> Result<()> {
-        self.check_permission(Permission::MAY_WRITE)?;
         self.remove_xattr(name)
     }
 }

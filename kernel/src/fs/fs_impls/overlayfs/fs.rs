@@ -318,6 +318,16 @@ impl OverlayInode {
         upper.write_at(offset, reader, status_flags)
     }
 
+    pub fn prepare_write_at(
+        &self,
+        offset: usize,
+        len: usize,
+        status_flags: StatusFlags,
+    ) -> Result<usize> {
+        let upper = self.build_upper_recursively_if_needed()?;
+        upper.prepare_write_at(offset, len, status_flags)
+    }
+
     pub fn read_at(
         &self,
         offset: usize,
@@ -471,6 +481,18 @@ impl OverlayInode {
         upper.resize(new_size)
     }
 
+    pub fn check_resize(&self, new_size: usize) -> Result<()> {
+        if self.type_ == InodeType::Dir {
+            return_errno_with_message!(Errno::EISDIR, "the inode is a directory");
+        }
+        if self.type_ != InodeType::File {
+            return_errno_with_message!(Errno::EINVAL, "the inode is not a regular file");
+        }
+
+        let upper = self.build_upper_recursively_if_needed()?;
+        upper.check_resize(new_size)
+    }
+
     pub fn metadata(&self) -> Metadata {
         let mut metadata = self.get_top_valid_inode().metadata();
         metadata.ino = self.ino;
@@ -494,6 +516,19 @@ impl OverlayInode {
         // Do copy-up for the potential memory mapping operations
         let upper = self.build_upper_recursively_if_needed().unwrap();
         upper.page_cache()
+    }
+
+    pub fn page_cache_for_exec_write(&self) -> Result<Option<PageCache>> {
+        if self
+            .get_top_valid_inode()
+            .page_cache_for_exec_write()?
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let upper = self.build_upper_recursively_if_needed()?;
+        upper.page_cache_for_exec_write()
     }
 
     pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
@@ -579,7 +614,15 @@ impl OverlayInode {
     pub fn set_mode(&self, mode: InodeMode) -> Result<()>;
     pub fn set_owner(&self, uid: Uid) -> Result<()>;
     pub fn set_group(&self, gid: Gid) -> Result<()>;
+    pub fn check_fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()>;
     pub fn fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()>;
+    pub fn set_xattr(
+        &self,
+        name: XattrName,
+        value_reader: &mut VmReader,
+        flags: XattrSetFlags,
+    ) -> Result<()>;
+    pub fn remove_xattr(&self, name: XattrName) -> Result<()>;
 }
 
 #[inherit_methods(from = "self.build_upper_recursively_if_needed().unwrap()")]
@@ -967,6 +1010,12 @@ impl FileOps for OverlayInode {
         reader: &mut VmReader,
         status_flags: StatusFlags,
     ) -> Result<usize>;
+    fn prepare_write_at(
+        &self,
+        offset: usize,
+        len: usize,
+        status_flags: StatusFlags,
+    ) -> Result<usize>;
     fn readdir_at(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize>;
 }
 
@@ -974,6 +1023,7 @@ impl FileOps for OverlayInode {
 impl Inode for OverlayInode {
     fn size(&self) -> usize;
     fn resize(&self, new_size: usize) -> Result<()>;
+    fn check_resize(&self, new_size: usize) -> Result<()>;
     fn metadata(&self) -> Metadata;
     fn extension(&self) -> &Extension;
     fn ino(&self) -> u64;
@@ -991,6 +1041,7 @@ impl Inode for OverlayInode {
     fn ctime(&self) -> Duration;
     fn set_ctime(&self, time: Duration);
     fn page_cache(&self) -> Option<PageCache>;
+    fn page_cache_for_exec_write(&self) -> Result<Option<PageCache>>;
     fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>>;
     fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>>;
     fn open(
@@ -1013,6 +1064,7 @@ impl Inode for OverlayInode {
     fn write_link(&self, target: &str) -> Result<()>;
     fn sync_all(&self) -> Result<()>;
     fn sync_data(&self) -> Result<()>;
+    fn check_fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()>;
     fn fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()>;
     fn fs(&self) -> Arc<dyn FileSystem>;
     fn set_xattr(

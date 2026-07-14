@@ -19,6 +19,8 @@ Supported functionality in SCML:
 {{#include mount.scml}}
 ```
 
+`MS_NOSUID` suppresses set-ID and file-capability privilege gains.
+
 Partially supported mount flags:
 * `MS_REC` is only effective when used in conjunction with `MS_BIND`
 * `MS_REMOUNT` can be used, but the set options have no actual effect.
@@ -29,7 +31,6 @@ Partially supported mount flags:
 * `MS_NODEV` can be set but have no actual effect.
 * `MS_NODIRATIME` can be set but have no actual effect.
 * `MS_NOEXEC` can be set but have no actual effect.
-* `MS_NOSUID` can be set but have no actual effect.
 * `MS_RDONLY` can be set but have no actual effect.
 * `MS_RELATIME` can be set but have no actual effect.
 * `MS_SILENT` can be set but have no actual effect.

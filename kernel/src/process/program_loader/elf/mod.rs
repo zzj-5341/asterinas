@@ -6,4 +6,4 @@ mod relocate;
 
 pub(super) use elf_file::ElfHeaders;
 pub(in crate::process) use load_elf::ElfLoadInfo;
-pub(super) use load_elf::load_elf_to_vmar;
+pub(super) use load_elf::{load_elf_to_vmar, lookup_ldso, parse_ldso_headers};

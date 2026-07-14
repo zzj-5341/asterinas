@@ -4,6 +4,7 @@
 //!
 //! This module defines the fundamental interfaces that file systems should implement.
 
+pub(crate) mod file_privilege;
 pub mod file_system;
 pub mod inode;
 pub mod inode_ext;

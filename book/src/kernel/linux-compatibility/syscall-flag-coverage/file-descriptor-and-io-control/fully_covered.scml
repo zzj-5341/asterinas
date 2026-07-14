@@ -6,7 +6,7 @@ dup3(oldfd, newfd, flags);
 // Monitor multiplexed I/O with signal safety and precise timeout handling
 pselect6(nfds, readfds, writefds, exceptfds, timeout, sigmask);
 
-// Transfer data between file descriptors
+// Transfer data; regular-file output invalidates file privilege metadata on success
 sendfile(out_fd, in_fd, offset, count);
 
 // Synchronize a file's in-core state with storage device

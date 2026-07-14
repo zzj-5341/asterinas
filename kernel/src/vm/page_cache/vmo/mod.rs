@@ -131,6 +131,8 @@ pub struct Vmo {
     // not have the knowledge to determine if they belong to memfd. We may want to enhance
     // `VmoOptions` to make VMOs aware of whether its writable mappings should be tracked.
     pub(super) writable_mapping_status: WritableMappingStatus,
+    /// The status of file writes that conflict with executable mappings.
+    pub(super) exec_write_status: ExecWriteStatus,
 }
 
 impl Debug for Vmo {
@@ -140,6 +142,7 @@ impl Debug for Vmo {
             .field("flags", &self.flags)
             .field("size", &self.size)
             .field("writable_mapping_status", &self.writable_mapping_status)
+            .field("exec_write_status", &self.exec_write_status)
             .finish_non_exhaustive()
     }
 }
@@ -342,6 +345,11 @@ impl Vmo {
         // VMOs with a backend do not use this field.
         debug_assert!(!self.has_backend());
         &self.writable_mapping_status
+    }
+
+    /// Returns the status of file writes that conflict with executable mappings.
+    pub(super) fn exec_write_status(&self) -> &ExecWriteStatus {
+        &self.exec_write_status
     }
 
     /// Decommits anonymous pages in the specified byte range.
@@ -907,18 +915,62 @@ pub fn get_page_idx_range(vmo_offset_range: &Range<usize>) -> Range<usize> {
 /// - **Zero**: no writable mappings, and writable mappings are still allowed.
 /// - **Negative values**: writable mappings are denied.
 #[derive(Debug, Default)]
-pub struct WritableMappingStatus(AtomicIsize);
+struct SignedAccessGate(AtomicIsize);
+
+impl SignedAccessGate {
+    fn acquire_access(&self) -> Result<(), ()> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                (value >= 0).then(|| value.checked_add(1)).flatten()
+            })
+            .map(drop)
+            .map_err(drop)
+    }
+
+    fn duplicate_access(&self) {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                (value > 0).then(|| value.checked_add(1)).flatten()
+            })
+            .expect("only an active access can be duplicated");
+    }
+
+    fn release_access(&self) {
+        self.0
+            .fetch_update(Ordering::Release, Ordering::Relaxed, |value| {
+                (value > 0).then(|| value.checked_sub(1)).flatten()
+            })
+            .expect("only an active access can be released");
+    }
+
+    fn acquire_denial(&self) -> Result<(), ()> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                (value <= 0).then(|| value.checked_sub(1)).flatten()
+            })
+            .map(drop)
+            .map_err(drop)
+    }
+
+    fn release_denial(&self) {
+        self.0
+            .fetch_update(Ordering::Release, Ordering::Relaxed, |value| {
+                (value < 0).then(|| value.checked_add(1)).flatten()
+            })
+            .expect("only an active denial can be released");
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct WritableMappingStatus(SignedAccessGate);
 
 impl WritableMappingStatus {
     /// Builds a new writable mapping.
     ///
     /// Fails with `EPERM` if writable mappings have been denied.
     pub fn map(&self) -> Result<()> {
-        // Increase unless negative
         self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                (v >= 0).then(|| v + 1)
-            })
+            .acquire_access()
             .map_err(|_| Error::with_message(Errno::EPERM, "writable mappings have been denied"))?;
         Ok(())
     }
@@ -927,14 +979,9 @@ impl WritableMappingStatus {
     ///
     /// Fails with `EBUSY` if there are still active writable mappings.
     pub fn deny(&self) -> Result<()> {
-        // Decrease unless positive
-        self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                (v <= 0).then_some(-1)
-            })
-            .map_err(|_| {
-                Error::with_message(Errno::EBUSY, "there are still active writable mappings")
-            })?;
+        self.0.acquire_denial().map_err(|_| {
+            Error::with_message(Errno::EBUSY, "there are still active writable mappings")
+        })?;
         Ok(())
     }
 
@@ -942,13 +989,49 @@ impl WritableMappingStatus {
     ///
     /// Typically used when splitting an existing mapping, or forking a process.
     pub fn increment(&self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
+        self.0.duplicate_access();
     }
 
     /// Decrements the writable mapping counter.
     ///
     /// Typically used when unmapping a region, exiting a process, or merging mappings.
     pub fn decrement(&self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.0.release_access();
+    }
+}
+
+/// A status counter coordinating file writes with executable mappings of a VMO.
+///
+/// Positive values count active write accesses.
+/// Negative values count active write denials held by executable address spaces.
+/// Zero permits either side to acquire the status.
+#[derive(Debug, Default)]
+pub(super) struct ExecWriteStatus(SignedAccessGate);
+
+impl ExecWriteStatus {
+    /// Acquires one write access unless executable mappings deny writes.
+    pub(super) fn acquire(&self) -> Result<()> {
+        self.0
+            .acquire_access()
+            .map_err(|_| Error::with_message(Errno::ETXTBSY, "the file is being executed"))?;
+        Ok(())
+    }
+
+    /// Releases one write access.
+    pub(super) fn release(&self) {
+        self.0.release_access();
+    }
+
+    /// Denies writes unless a write access is already active.
+    pub(super) fn deny(&self) -> Result<()> {
+        self.0
+            .acquire_denial()
+            .map_err(|_| Error::with_message(Errno::ETXTBSY, "the file is open for writing"))?;
+        Ok(())
+    }
+
+    /// Releases one write denial.
+    pub(super) fn allow(&self) {
+        self.0.release_denial();
     }
 }

@@ -28,6 +28,9 @@ Silently-ignored flags:
 Partially supported flags:
 * `MAP_FIXED_NOREPLACE` is treated as `MAP_FIXED`
 
+A potentially writable shared mapping of a live executable fails with `ETXTBSY`.
+Conversely, `execve` fails with `ETXTBSY` while such a mapping exists.
+
 Unsupported flags:
 * `MAP_HUGE_1GB`
 * `MAP_HUGE_2MB`

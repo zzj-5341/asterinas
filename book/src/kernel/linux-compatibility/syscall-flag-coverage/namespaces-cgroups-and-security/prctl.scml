@@ -1,4 +1,4 @@
-// Retrieve or set the parent-death signal
+// Retrieve or set the parent-death signal; secure execve clears the configured signal
 prctl(op = PR_GET_PDEATHSIG | PR_SET_PDEATHSIG, sig);
 
 // Get or set the name of calling thread

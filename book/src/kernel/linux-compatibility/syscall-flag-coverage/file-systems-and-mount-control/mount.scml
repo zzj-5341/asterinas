@@ -5,6 +5,13 @@ mount(
     data
 );
 
+// Create a mount that suppresses set-ID and file-capability privilege gains
+mount(
+    source, target, filesystemtype,
+    mountflags = MS_NOSUID,
+    data
+);
+
 // Move the existing mount point
 mount(
     source, target, filesystemtype,

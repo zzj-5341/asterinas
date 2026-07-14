@@ -9,7 +9,7 @@ fstat(fd, statbuf);
 // Read from a file descriptor
 read(fd, buf, count);
 
-// Write to a file descriptor
+// Write to a file descriptor and invalidate file privilege metadata on success
 write(fd, buf, count);
 
 // Create a directory
@@ -22,16 +22,16 @@ pread64(fd, buf, count, offset);
 // Check user's permissions for a file
 access(pathname, mode);
 
-// Write to a file descriptor at a given offset
+// Write at a given offset and invalidate file privilege metadata on success
 pwrite64(fd, buf, count, offset);
 
-// Read/write data into multiple buffers
+// Read/write data into multiple buffers; successful writes invalidate file privilege metadata
 readv(fd, iov, iovcnt);
 preadv(fd, iov, iovcnt, offset);
 writev(fd, iov, iovcnt);
 pwritev(fd, iov, iovcnt, offset);
 
-// Truncate a file to a specified length
+// Truncate a file and invalidate file privilege metadata on success
 truncate(path, length);
 ftruncate(fd, length);
 
@@ -49,7 +49,7 @@ renameat(olddirfd, oldpath, newdirfd, newpath);
 // Delete a directory
 rmdir(path);
 
-// Create a file
+// Create or truncate a file; successful truncation invalidates file privilege metadata
 creat(path, mode);
 
 // Make a new name for a file
@@ -74,7 +74,7 @@ fchmod(fd, mode);
 fchmodat(dirfd, path_ptr, mode);
 fchmodat2(dirfd, path_ptr, mode, flags = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 
-// Change ownership of a file
+// Change ownership of a file and invalidate its file privilege metadata
 chown(path, owner, group);
 fchown(fd, owner, group);
 lchown(path, owner, group);
@@ -101,7 +101,7 @@ fgetxattr(fd, name, value, size);
 
 xattr_flags = XATTR_CREATE | XATTR_REPLACE;
 
-// Set an extended attribute value
+// Set an extended attribute value, including validated security.capability values
 setxattr(path, name, value, size, flags = <xattr_flags>);
 lsetxattr(path, name, value, size, flags = <xattr_flags>);
 fsetxattr(fd, name, value, size, flags = <xattr_flags>);
@@ -111,7 +111,7 @@ listxattr(path, list, size);
 llistxattr(path, list, size);
 flistxattr(fd, list, size);
 
-// Remove an extended attribute
+// Remove an extended attribute, including CAP_SETFCAP-protected security.capability values
 removexattr(path, name);
 lremovexattr(path, name);
 fremovexattr(fd, name);

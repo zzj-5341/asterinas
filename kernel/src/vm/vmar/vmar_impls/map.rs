@@ -2,7 +2,7 @@
 
 use core::num::NonZeroUsize;
 
-use super::{MappedMemory, MappedVmo, RssDelta, VmMapping, Vmar};
+use super::{MappedMemory, MappedVmo, MappedVmoWriteTracking, RssDelta, VmMapping, Vmar};
 use crate::{
     fs::{
         file::{FileLike, Mappable},
@@ -355,19 +355,26 @@ impl<'a> VmarMapOptions<'a> {
                     ));
                 }
 
-                let is_writable_tracked = if let Some(ref path) = path
-                    && let Some(memfd_inode) = path.inode().downcast_ref::<MemfdInode>()
+                let write_tracking = if let Some(ref path) = path
                     && is_shared
                     && may_perms.contains(VmPerms::MAY_WRITE)
                 {
-                    memfd_inode.check_writable(perms, &mut may_perms)?;
-                    true
+                    if let Some(memfd_inode) = path.inode().downcast_ref::<MemfdInode>() {
+                        memfd_inode.check_writable(perms, &mut may_perms)?;
+                        if may_perms.contains(VmPerms::MAY_WRITE) {
+                            MappedVmoWriteTracking::ExecWriteAndWritableMapping
+                        } else {
+                            MappedVmoWriteTracking::Untracked
+                        }
+                    } else {
+                        MappedVmoWriteTracking::ExecWrite
+                    }
                 } else {
-                    false
+                    MappedVmoWriteTracking::Untracked
                 };
 
                 let mapped_mem =
-                    MappedMemory::Vmo(MappedVmo::new(vmo, vmo_offset, is_writable_tracked)?);
+                    MappedMemory::Vmo(MappedVmo::new(vmo, vmo_offset, write_tracking)?);
                 (mapped_mem, None)
             }
             Some(Mappable::IoMem(io_mem)) => (MappedMemory::Device, Some(io_mem)),

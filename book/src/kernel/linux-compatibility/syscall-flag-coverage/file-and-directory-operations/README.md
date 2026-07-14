@@ -9,6 +9,22 @@ utime, and utimensat
 under this category.
 -->
 
+### File capability attributes
+
+`execve` reads Linux V1, V2, and V3 `security.capability` attributes.
+`setxattr`, `lsetxattr`, and `fsetxattr` accept validated V2 and V3 attributes;
+Linux does not permit new V1 attributes to be written.
+Writing or removing this attribute requires `CAP_SETFCAP`.
+
+Successful content-modifying writes, truncation, and allocation operations remove file capabilities.
+They also clear applicable set-ID bits unless the caller has `CAP_FSETID`.
+Ownership changes remove file capabilities and applicable set-ID bits.
+
+The corresponding syscall forms are documented in `fully_covered.scml`,
+`open_and_openat.scml`, `preadv2_and_pwritev2.scml`, `fallocate.scml`,
+and `../file-descriptor-and-io-control/fully_covered.scml`.
+Namespaced attribute conversion remains unsupported until nontrivial user namespace mappings exist.
+
 ### `open` and `openat`
 
 Supported functionality of `open` in SCML:
@@ -31,6 +47,9 @@ Partially-supported flags:
 
 Supported and unsupported functionality of `openat` are the same as `open`.
 The SCML rules are omitted for brevity.
+
+Writable opens fail with `ETXTBSY` while the file is retained as a live executable image.
+This check precedes `O_TRUNC`, so a rejected open does not change file contents or privilege metadata.
 
 For more information,
 see [the man page](https://man7.org/linux/man-pages/man2/openat.2.html).
