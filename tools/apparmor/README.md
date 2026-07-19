@@ -52,5 +52,6 @@ sh ./run-smoke-test.sh ./smoke-profile.bin
 
 The smoke test mounts `securityfs` if needed, writes the binary policy to
 `/sys/kernel/security/apparmor/.replace`, verifies `/proc/self/attr/exec`
-on-exec transitions and `/proc/self/attr/prev`, then verifies in the transitioned
-process that a permitted read succeeds and an explicitly denied read fails.
+on-exec transitions and `/proc/self/attr/prev`, switches the test shell through
+the temporary `/proc/sys/kernel/apparmor/current` control file, then verifies
+that a permitted read succeeds and an explicitly denied read fails.

@@ -83,6 +83,15 @@ pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskSta
     lsm::apparmor_task_state(posix_thread)
 }
 
+/// Loads, replaces, or removes an AppArmor profile from policy text.
+pub fn load_apparmor_policy(policy_text: &str) -> Result<()> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    lsm::load_apparmor_policy(policy_text)
+}
+
 /// Loads, replaces, or removes an AppArmor profile from binary policy data.
 pub fn load_apparmor_binary_policy(
     policy: &[u8],
@@ -93,6 +102,11 @@ pub fn load_apparmor_binary_policy(
     }
 
     lsm::load_apparmor_binary_policy(policy, expected_operation)
+}
+
+/// Returns whether the data starts with the AppArmor binary policy magic.
+pub fn has_apparmor_binary_policy_magic(policy: &[u8]) -> bool {
+    lsm::has_apparmor_binary_policy_magic(policy)
 }
 
 /// Removes a loaded AppArmor profile by name.
