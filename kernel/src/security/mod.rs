@@ -12,7 +12,10 @@ cfg_if! {
     }
 }
 
-pub use self::lsm::{FileCreateKind, FileDeleteKind, FilePermission, FileSetattrKind, YamaScope};
+pub use self::lsm::{
+    AppArmorMode, AppArmorProfileName, AppArmorTaskState, FileCreateKind, FileDeleteKind,
+    FilePermission, FileSetattrKind, YamaScope,
+};
 use crate::{
     fs::{
         file::{AccessMode, StatusFlags},
@@ -68,6 +71,34 @@ pub fn get_yama_scope() -> YamaScope {
 #[expect(dead_code, reason = "keeps the top-level security facade complete")]
 pub fn set_yama_scope(new_scope: YamaScope) -> Result<()> {
     lsm::yama::set_scope(new_scope)
+}
+
+/// Returns whether the AppArmor LSM is enabled.
+pub fn is_apparmor_enabled() -> bool {
+    lsm::is_apparmor_enabled()
+}
+
+/// Returns the AppArmor task state for a POSIX thread if the module is active.
+pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskState> {
+    lsm::apparmor_task_state(posix_thread)
+}
+
+/// Returns summaries of the implicit and loaded AppArmor profiles.
+pub fn apparmor_profile_summaries() -> Result<Vec<(AppArmorProfileName, AppArmorMode)>> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    Ok(lsm::apparmor_profile_summaries())
+}
+
+/// Returns the root AppArmor policy namespace name.
+pub fn apparmor_root_namespace_name() -> Result<&'static str> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    Ok(lsm::apparmor_root_namespace_name())
 }
 
 /// Runs the LSM stack for an executable image check.

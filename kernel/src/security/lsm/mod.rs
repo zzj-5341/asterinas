@@ -7,7 +7,7 @@
 //! inspect common hook contexts before allowing or rejecting an operation.
 //!
 //! This module defines the common LSM traits and hook contexts shared by
-//! built-in modules such as `capability` and `yama`. Module
+//! built-in modules such as `capability`, `yama`, and `apparmor`. Module
 //! selection follows the `lsm=` and legacy `security=` kernel command-line
 //! parameters.
 
@@ -18,8 +18,16 @@ pub mod yama {
     pub use super::modules::yama::{YamaScope, get_scope, set_scope};
 }
 
+pub mod apparmor {
+    pub use super::modules::apparmor::{
+        AppArmorMode, AppArmorProfileName, AppArmorTaskState, profile_summaries,
+        root_namespace_name,
+    };
+}
+
 use self::hooks::{LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook, LsmSignalHook};
 pub use self::{
+    apparmor::{AppArmorMode, AppArmorProfileName, AppArmorTaskState},
     hooks::{
         BprmCheckContext, BprmCommittedCredsContext, CapableContext, FileCreateContext,
         FileCreateKind, FileDeleteContext, FileDeleteKind, FileGetattrContext, FileLinkContext,
@@ -28,7 +36,7 @@ pub use self::{
     },
     yama::YamaScope,
 };
-use crate::prelude::*;
+use crate::{prelude::*, process::posix_thread::PosixThread};
 
 bitflags! {
     /// LSM module flags.
@@ -56,6 +64,28 @@ pub fn is_yama_enabled() -> bool {
     modules::active_modules()
         .iter()
         .any(|module| module.name() == "yama")
+}
+
+/// Returns whether the AppArmor LSM is enabled.
+pub fn is_apparmor_enabled() -> bool {
+    modules::active_modules()
+        .iter()
+        .any(|module| module.name() == "apparmor")
+}
+
+/// Returns the AppArmor task state for a POSIX thread if the module is active.
+pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskState> {
+    is_apparmor_enabled().then(|| posix_thread.credentials().apparmor_task_state())
+}
+
+/// Returns summaries of the implicit and loaded AppArmor profiles.
+pub fn apparmor_profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
+    apparmor::profile_summaries()
+}
+
+/// Returns the root AppArmor policy namespace name.
+pub fn apparmor_root_namespace_name() -> &'static str {
+    apparmor::root_namespace_name()
 }
 
 pub(super) fn init() {
