@@ -356,9 +356,16 @@ impl FileOps for SecurityFsInode {
             }
             SecurityFsNodeKind::Remove => {
                 require_mac_admin()?;
-                let (profile_name, read_bytes) = read_bytes_from(reader, MAX_BINARY_POLICY_LEN)?;
-                let profile_name = parse_remove_profile_name(&profile_name)?;
-                security::remove_apparmor_profile_by_name(profile_name)?;
+                let (policy, read_bytes) = read_bytes_from(reader, MAX_BINARY_POLICY_LEN)?;
+                if security::has_apparmor_binary_policy_magic(&policy) {
+                    security::load_apparmor_binary_policy(
+                        &policy,
+                        AppArmorPolicyOperation::Remove,
+                    )?;
+                } else {
+                    let profile_name = parse_remove_profile_name(&policy)?;
+                    security::remove_apparmor_profile_by_name(profile_name)?;
+                }
                 Ok(read_bytes)
             }
             _ => return_errno_with_message!(Errno::EPERM, "the securityfs file is not writable"),

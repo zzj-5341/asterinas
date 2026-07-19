@@ -6,13 +6,27 @@ use super::{
     attachment::AppArmorAttachment,
     capability::AppArmorCapabilityPolicy,
     dfa::{AppArmorDfa, AppArmorDfaFilePolicy, AppArmorDfaPermissions},
-    path::{AppArmorExecMode, AppArmorExecTransition},
+    path::{
+        AppArmorExecMode, AppArmorExecTransition, AppArmorFilePermission, AppArmorPathPattern,
+        AppArmorPathRule,
+    },
     policy_update::AppArmorPolicyUpdate,
     profile::{AppArmorFilePolicy, AppArmorProfile, AppArmorProfileName},
     state::AppArmorMode,
 };
 use crate::{prelude::*, process::credentials::capabilities::CapSet};
 
+const ASTERINAS_MAGIC: &[u8; 8] = b"AASTAA01";
+const ASTERINAS_OP_REPLACE: u8 = 1;
+const ASTERINAS_OP_REMOVE: u8 = 2;
+const ASTERINAS_MODE_NONE: u8 = 0;
+const ASTERINAS_MODE_ENFORCE: u8 = 1;
+const ASTERINAS_MODE_COMPLAIN: u8 = 2;
+const ASTERINAS_TRANSITION_INHERIT: u8 = 0;
+const ASTERINAS_TRANSITION_UNCONFINED: u8 = 1;
+const ASTERINAS_TRANSITION_PROFILE: u8 = 2;
+const ASTERINAS_RULE_DENY: u8 = 1 << 0;
+const ASTERINAS_RULE_AUDIT: u8 = 1 << 1;
 const LINUX_MIN_ABI_VERSION: u32 = 5;
 const LINUX_MAX_ABI_VERSION: u32 = 9;
 const LINUX_FORCE_COMPLAIN_FLAG: u32 = 1 << 11;
@@ -31,6 +45,16 @@ pub enum AppArmorPolicyOperation {
     Replace,
     /// Removes a profile.
     Remove,
+}
+
+impl AppArmorPolicyOperation {
+    fn from_asterinas_opcode(opcode: u8) -> Result<Self> {
+        match opcode {
+            ASTERINAS_OP_REPLACE => Ok(Self::Replace),
+            ASTERINAS_OP_REMOVE => Ok(Self::Remove),
+            _ => return_errno_with_message!(Errno::EINVAL, "the AppArmor policy opcode is invalid"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,11 +94,86 @@ impl LinuxCode {
     }
 }
 
+/// Returns whether a byte slice starts with a legacy Asterinas AppArmor magic.
+pub fn has_binary_policy_magic(policy: &[u8]) -> bool {
+    policy.starts_with(ASTERINAS_MAGIC)
+}
+
 pub(super) fn unpack_binary_policy(
     policy: &[u8],
     expected_operation: AppArmorPolicyOperation,
 ) -> Result<AppArmorPolicyUpdate> {
-    unpack_linux_binary_policy(policy, expected_operation)
+    if policy.starts_with(ASTERINAS_MAGIC) {
+        unpack_asterinas_binary_policy(policy, expected_operation)
+    } else {
+        unpack_linux_binary_policy(policy, expected_operation)
+    }
+}
+
+fn unpack_asterinas_binary_policy(
+    policy: &[u8],
+    expected_operation: AppArmorPolicyOperation,
+) -> Result<AppArmorPolicyUpdate> {
+    let mut reader = BinaryReader::new(policy);
+    let magic = reader.read_bytes(ASTERINAS_MAGIC.len())?;
+    if magic != ASTERINAS_MAGIC {
+        return_errno_with_message!(Errno::EINVAL, "the AppArmor binary policy magic is invalid");
+    }
+
+    let operation = AppArmorPolicyOperation::from_asterinas_opcode(reader.read_u8()?)?;
+    if operation != expected_operation {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "the AppArmor binary policy operation does not match the target file"
+        );
+    }
+
+    let mode = parse_asterinas_mode(reader.read_u8()?)?;
+    let _reserved = reader.read_u16()?;
+    let name_len = usize::from(reader.read_u16()?);
+    let rule_count = usize::from(reader.read_u16()?);
+    let profile_name = read_profile_name(&mut reader, name_len)?;
+
+    if profile_name.is_unconfined() {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "the implicit unconfined AppArmor profile cannot be changed"
+        );
+    }
+
+    let update = match operation {
+        AppArmorPolicyOperation::Replace => {
+            let Some(mode) = mode else {
+                return_errno_with_message!(
+                    Errno::EINVAL,
+                    "replacement AppArmor policies require a profile mode"
+                );
+            };
+            let mut rules = Vec::with_capacity(rule_count);
+            for _ in 0..rule_count {
+                rules.push(read_asterinas_rule(&mut reader)?);
+            }
+            AppArmorPolicyUpdate::Replace(Box::new(AppArmorProfile::new(profile_name, mode, rules)))
+        }
+        AppArmorPolicyOperation::Remove => {
+            if mode.is_some() || rule_count != 0 {
+                return_errno_with_message!(
+                    Errno::EINVAL,
+                    "remove AppArmor policies must not carry mode or rules"
+                );
+            }
+            AppArmorPolicyUpdate::Remove(profile_name)
+        }
+    };
+
+    if reader.has_remaining() {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "the AppArmor binary policy has trailing bytes"
+        );
+    }
+
+    Ok(update)
 }
 
 fn unpack_linux_binary_policy(
@@ -107,6 +206,95 @@ fn unpack_linux_binary_policy(
     Ok(AppArmorPolicyUpdate::ReplaceMany(profiles))
 }
 
+fn parse_asterinas_mode(mode: u8) -> Result<Option<AppArmorMode>> {
+    match mode {
+        ASTERINAS_MODE_NONE => Ok(None),
+        ASTERINAS_MODE_ENFORCE => Ok(Some(AppArmorMode::Enforce)),
+        ASTERINAS_MODE_COMPLAIN => Ok(Some(AppArmorMode::Complain)),
+        _ => return_errno_with_message!(Errno::EINVAL, "the AppArmor policy mode is invalid"),
+    }
+}
+
+fn read_profile_name(reader: &mut BinaryReader<'_>, len: usize) -> Result<AppArmorProfileName> {
+    AppArmorProfileName::new(read_string(reader, len)?)
+}
+
+fn read_asterinas_rule(reader: &mut BinaryReader<'_>) -> Result<AppArmorPathRule> {
+    let flags = reader.read_u8()?;
+    let transition = reader.read_u8()?;
+    let permissions = read_permissions(reader.read_u32()?)?;
+    let pattern_len = usize::from(reader.read_u16()?);
+    let target_len = usize::from(reader.read_u16()?);
+    let pattern = AppArmorPathPattern::new(read_string(reader, pattern_len)?);
+    let target = read_string(reader, target_len)?;
+
+    let deny = flags & ASTERINAS_RULE_DENY != 0;
+    let audit = flags & ASTERINAS_RULE_AUDIT != 0;
+    if flags & !(ASTERINAS_RULE_DENY | ASTERINAS_RULE_AUDIT) != 0 {
+        return_errno_with_message!(Errno::EINVAL, "the AppArmor rule flags are invalid");
+    }
+
+    let exec_transition = match transition {
+        ASTERINAS_TRANSITION_INHERIT => {
+            if !target.is_empty() {
+                return_errno_with_message!(
+                    Errno::EINVAL,
+                    "inherit AppArmor transitions must not name a target profile"
+                );
+            }
+            AppArmorExecTransition::Inherit
+        }
+        ASTERINAS_TRANSITION_UNCONFINED => {
+            if !target.is_empty() {
+                return_errno_with_message!(
+                    Errno::EINVAL,
+                    "unconfined AppArmor transitions must not name a target profile"
+                );
+            }
+            AppArmorExecTransition::unconfined(AppArmorExecMode::Unsafe)
+        }
+        ASTERINAS_TRANSITION_PROFILE => AppArmorExecTransition::profile(
+            AppArmorProfileName::new(target)?,
+            AppArmorExecMode::Unsafe,
+        ),
+        _ => return_errno_with_message!(Errno::EINVAL, "the AppArmor exec transition is invalid"),
+    };
+
+    if deny && exec_transition != AppArmorExecTransition::Inherit {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "deny rules cannot carry AppArmor exec transitions"
+        );
+    }
+    if exec_transition != AppArmorExecTransition::Inherit
+        && !permissions.contains(AppArmorFilePermission::EXECUTE)
+    {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "AppArmor exec transitions require execute permission"
+        );
+    }
+
+    Ok(AppArmorPathRule::new_with_transition(
+        pattern,
+        permissions,
+        exec_transition,
+        audit,
+        deny,
+    ))
+}
+
+fn read_permissions(bits: u32) -> Result<AppArmorFilePermission> {
+    let Some(permissions) = AppArmorFilePermission::from_bits(bits) else {
+        return_errno_with_message!(Errno::EINVAL, "the AppArmor permissions are invalid");
+    };
+    if permissions.is_empty() {
+        return_errno_with_message!(Errno::EINVAL, "the AppArmor permissions are empty");
+    }
+
+    Ok(permissions)
+}
+
 fn read_capability_mask(low: u32, high: u32) -> Result<CapSet> {
     let bits = u64::from(low) | (u64::from(high) << 32);
     CapSet::try_from(bits).map_err(|_| {
@@ -115,6 +303,17 @@ fn read_capability_mask(low: u32, high: u32) -> Result<CapSet> {
             "the AppArmor capability mask contains unsupported capabilities",
         )
     })
+}
+
+fn read_string(reader: &mut BinaryReader<'_>, len: usize) -> Result<String> {
+    let bytes = reader.read_bytes(len)?;
+    let text = str::from_utf8(bytes)
+        .map_err(|_| Error::with_message(Errno::EINVAL, "the AppArmor string is not UTF-8"))?;
+    if text.bytes().any(|byte| byte == 0) {
+        return_errno_with_message!(Errno::EINVAL, "the AppArmor string contains a nul byte");
+    }
+
+    Ok(text.to_string())
 }
 
 struct LinuxHeader {
@@ -696,4 +895,47 @@ fn parse_linux_transition_target(target: String) -> Result<AppArmorExecTransitio
 
     AppArmorProfileName::new(target)
         .map(|profile_name| AppArmorExecTransition::profile(profile_name, AppArmorExecMode::Unsafe))
+}
+
+struct BinaryReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> BinaryReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn has_remaining(&self) -> bool {
+        self.offset < self.bytes.len()
+    }
+
+    fn read_u8(&mut self) -> Result<u8> {
+        let bytes = self.read_bytes(1)?;
+        Ok(bytes[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16> {
+        let bytes = self.read_bytes(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn read_u32(&mut self) -> Result<u32> {
+        let bytes = self.read_bytes(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
+        let Some(end) = self.offset.checked_add(len) else {
+            return_errno_with_message!(Errno::EINVAL, "the AppArmor binary policy is truncated");
+        };
+        if end > self.bytes.len() {
+            return_errno_with_message!(Errno::EINVAL, "the AppArmor binary policy is truncated");
+        }
+
+        let bytes = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(bytes)
+    }
 }

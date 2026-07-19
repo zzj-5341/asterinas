@@ -21,8 +21,8 @@ pub mod yama {
 pub mod apparmor {
     pub use super::modules::apparmor::{
         AppArmorMode, AppArmorPolicyOperation, AppArmorProfileName, AppArmorTaskState,
-        change_onexec_state, change_profile_state, load_binary_policy, profile_summaries,
-        remove_profile_by_name, root_namespace_name,
+        change_onexec_state, change_profile_state, has_binary_policy_magic, load_binary_policy,
+        load_policy, profile_summaries, remove_profile_by_name, root_namespace_name,
     };
 }
 
@@ -79,12 +79,22 @@ pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskSta
     is_apparmor_enabled().then(|| posix_thread.credentials().apparmor_task_state())
 }
 
+/// Loads, replaces, or removes an AppArmor profile from policy text.
+pub fn load_apparmor_policy(policy_text: &str) -> Result<()> {
+    apparmor::load_policy(policy_text)
+}
+
 /// Loads, replaces, or removes an AppArmor profile from binary policy data.
 pub fn load_apparmor_binary_policy(
     policy: &[u8],
     expected_operation: AppArmorPolicyOperation,
 ) -> Result<()> {
     apparmor::load_binary_policy(policy, expected_operation)
+}
+
+/// Returns whether the data starts with the AppArmor binary policy magic.
+pub fn has_apparmor_binary_policy_magic(policy: &[u8]) -> bool {
+    apparmor::has_binary_policy_magic(policy)
 }
 
 /// Removes a loaded AppArmor profile by name.

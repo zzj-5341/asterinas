@@ -29,6 +29,7 @@ policy_bin=$1
 profile_name=${2:-asterinas-aa-smoke}
 securityfs_root=${SECURITYFS_ROOT:-/sys/kernel/security}
 apparmor_dir=$securityfs_root/apparmor
+current_file=/proc/sys/kernel/apparmor/current
 allowed_path=/tmp/asterinas-aa-allowed
 denied_path=/tmp/asterinas-aa-denied
 attr_exec=/proc/self/attr/exec
@@ -39,6 +40,8 @@ probe_busybox=/test/apparmor-busybox
 [ -e /proc/self/attr/current ] || fail "/proc/self/attr/current is missing"
 [ -e /proc/self/attr/exec ] || fail "/proc/self/attr/exec is missing"
 [ -e /proc/self/attr/prev ] || fail "/proc/self/attr/prev is missing"
+[ -e "$current_file" ] || fail "AppArmor current profile control file is missing"
+
 current_profile=$(cat /proc/self/attr/current)
 [ -n "$current_profile" ] || fail "current AppArmor profile is empty"
 
@@ -93,5 +96,22 @@ printf '\n' > "$attr_exec"
 onexec_profile=$(cat "$attr_exec")
 [ -z "$onexec_profile" ] \
     || fail "expected cleared on-exec profile, got $onexec_profile"
+
+printf '%s' "$profile_name" > "$current_file"
+IFS= read -r current_profile < /proc/self/attr/current \
+    || fail "current AppArmor profile is not readable after confinement"
+[ "$current_profile" = "$profile_name" ] \
+    || fail "expected current profile $profile_name, got $current_profile"
+
+: < "$allowed_path" || fail "allowed file read was denied"
+
+set +e
+(: < "$denied_path") 2>/dev/null
+denied_status=$?
+set -e
+
+if [ "$denied_status" -eq 0 ]; then
+    fail "denied file read unexpectedly succeeded"
+fi
 
 echo "apparmor smoke: passed"

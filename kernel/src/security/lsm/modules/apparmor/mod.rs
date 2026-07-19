@@ -7,6 +7,7 @@ mod binary;
 mod capability;
 mod dfa;
 mod label;
+mod loader;
 mod namespace;
 mod path;
 mod policy;
@@ -239,12 +240,22 @@ impl LsmFileHook for AppArmorLsm {
     }
 }
 
+/// Loads, replaces, or removes an AppArmor profile from policy text.
+pub fn load_policy(policy_text: &str) -> Result<()> {
+    apply_policy_update(loader::parse_policy_load(policy_text)?)
+}
+
 /// Loads, replaces, or removes an AppArmor profile from binary policy data.
 pub fn load_binary_policy(
     policy: &[u8],
     expected_operation: AppArmorPolicyOperation,
 ) -> Result<()> {
     apply_policy_update(binary::unpack_binary_policy(policy, expected_operation)?)
+}
+
+/// Returns whether the data starts with the AppArmor binary policy magic.
+pub fn has_binary_policy_magic(policy: &[u8]) -> bool {
+    binary::has_binary_policy_magic(policy)
 }
 
 fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {

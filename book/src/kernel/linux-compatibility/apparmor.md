@@ -39,9 +39,10 @@ Supported policy control files:
 - `profiles`: lists loaded profiles and their modes.
 - `features`: exposes the AppArmor feature ABI supported by Asterinas.
 
-The `.load` and `.replace` files accept Linux AppArmor packed policy data
-produced by user space. The `.remove` file accepts a profile name. Policy
-control writes require `CAP_MAC_ADMIN` in the initial user namespace.
+The `.load` and `.replace` files accept binary policy data produced by user
+space. The `.remove` file accepts either a binary remove payload or a profile
+name. Policy control writes require `CAP_MAC_ADMIN` in the initial user
+namespace.
 
 The feature ABI currently exposes:
 - `features/abi`
@@ -72,6 +73,17 @@ AppArmor task identity is exposed through:
 The files report the current profile, the on-exec profile, and the previous
 profile for the task. The `current` and `exec` files are writable by the
 current task to request profile changes supported by the loaded policy.
+
+Asterinas also exposes compatibility control files under:
+
+```text
+/proc/sys/kernel/apparmor
+```
+
+Supported entries:
+- `profiles`
+- `load`
+- `current`
 
 ## Mediation coverage
 
