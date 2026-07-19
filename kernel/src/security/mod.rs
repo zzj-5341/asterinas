@@ -13,8 +13,8 @@ cfg_if! {
 }
 
 pub use self::lsm::{
-    AppArmorMode, AppArmorProfileName, AppArmorTaskState, FileCreateKind, FileDeleteKind,
-    FilePermission, FileSetattrKind, YamaScope,
+    AppArmorMode, AppArmorPolicyOperation, AppArmorProfileName, AppArmorTaskState, FileCreateKind,
+    FileDeleteKind, FilePermission, FileSetattrKind, YamaScope,
 };
 use crate::{
     fs::{
@@ -99,6 +99,27 @@ pub fn apparmor_root_namespace_name() -> Result<&'static str> {
     }
 
     Ok(lsm::apparmor_root_namespace_name())
+}
+
+/// Loads or replaces profiles from Linux AppArmor packed policy data.
+pub fn load_apparmor_binary_policy(
+    policy: &[u8],
+    expected_operation: AppArmorPolicyOperation,
+) -> Result<()> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    lsm::load_apparmor_binary_policy(policy, expected_operation)
+}
+
+/// Removes a loaded AppArmor profile by name.
+pub fn remove_apparmor_profile_by_name(profile_name: &str) -> Result<()> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    lsm::remove_apparmor_profile_by_name(profile_name)
 }
 
 /// Runs the LSM stack for an executable image check.

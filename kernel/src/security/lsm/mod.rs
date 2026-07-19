@@ -20,14 +20,14 @@ pub mod yama {
 
 pub mod apparmor {
     pub use super::modules::apparmor::{
-        AppArmorMode, AppArmorProfileName, AppArmorTaskState, profile_summaries,
-        root_namespace_name,
+        AppArmorMode, AppArmorPolicyOperation, AppArmorProfileName, AppArmorTaskState,
+        load_binary_policy, profile_summaries, remove_profile_by_name, root_namespace_name,
     };
 }
 
 use self::hooks::{LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook, LsmSignalHook};
 pub use self::{
-    apparmor::{AppArmorMode, AppArmorProfileName, AppArmorTaskState},
+    apparmor::{AppArmorMode, AppArmorPolicyOperation, AppArmorProfileName, AppArmorTaskState},
     hooks::{
         BprmCheckContext, BprmCommittedCredsContext, CapableContext, FileCreateContext,
         FileCreateKind, FileDeleteContext, FileDeleteKind, FileGetattrContext, FileLinkContext,
@@ -86,6 +86,19 @@ pub fn apparmor_profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> 
 /// Returns the root AppArmor policy namespace name.
 pub fn apparmor_root_namespace_name() -> &'static str {
     apparmor::root_namespace_name()
+}
+
+/// Loads or replaces profiles from Linux AppArmor packed policy data.
+pub fn load_apparmor_binary_policy(
+    policy: &[u8],
+    expected_operation: AppArmorPolicyOperation,
+) -> Result<()> {
+    apparmor::load_binary_policy(policy, expected_operation)
+}
+
+/// Removes a loaded AppArmor profile by name.
+pub fn remove_apparmor_profile_by_name(profile_name: &str) -> Result<()> {
+    apparmor::remove_profile_by_name(profile_name)
 }
 
 pub(super) fn init() {
