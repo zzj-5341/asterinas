@@ -83,25 +83,7 @@ pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskSta
     lsm::apparmor_task_state(posix_thread)
 }
 
-/// Returns summaries of the implicit and loaded AppArmor profiles.
-pub fn apparmor_profile_summaries() -> Result<Vec<(AppArmorProfileName, AppArmorMode)>> {
-    if !is_apparmor_enabled() {
-        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
-    }
-
-    Ok(lsm::apparmor_profile_summaries())
-}
-
-/// Returns the root AppArmor policy namespace name.
-pub fn apparmor_root_namespace_name() -> Result<&'static str> {
-    if !is_apparmor_enabled() {
-        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
-    }
-
-    Ok(lsm::apparmor_root_namespace_name())
-}
-
-/// Loads or replaces profiles from Linux AppArmor packed policy data.
+/// Loads, replaces, or removes an AppArmor profile from binary policy data.
 pub fn load_apparmor_binary_policy(
     policy: &[u8],
     expected_operation: AppArmorPolicyOperation,
@@ -120,6 +102,58 @@ pub fn remove_apparmor_profile_by_name(profile_name: &str) -> Result<()> {
     }
 
     lsm::remove_apparmor_profile_by_name(profile_name)
+}
+
+/// Returns summaries of the implicit and loaded AppArmor profiles.
+pub fn apparmor_profile_summaries() -> Result<Vec<(AppArmorProfileName, AppArmorMode)>> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    Ok(lsm::apparmor_profile_summaries())
+}
+
+/// Returns the root AppArmor policy namespace name.
+pub fn apparmor_root_namespace_name() -> Result<&'static str> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    Ok(lsm::apparmor_root_namespace_name())
+}
+
+/// Sets the current POSIX thread to a loaded AppArmor profile.
+pub fn set_current_apparmor_profile(profile_name: &str) -> Result<()> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    let current_thread = current_thread!();
+    let Some(posix_thread) = current_thread.as_posix_thread() else {
+        return_errno_with_message!(Errno::ESRCH, "the current thread is not a POSIX thread");
+    };
+
+    let task_state = posix_thread.credentials().apparmor_task_state();
+    let target_state = lsm::apparmor_change_profile_state(&task_state, profile_name)?;
+    posix_thread.set_apparmor_task_state(target_state);
+    Ok(())
+}
+
+/// Sets the current POSIX thread's profile requested for the next `execve`.
+pub fn set_current_apparmor_onexec_profile(profile_name: Option<&str>) -> Result<()> {
+    if !is_apparmor_enabled() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor LSM is not enabled");
+    }
+
+    let current_thread = current_thread!();
+    let Some(posix_thread) = current_thread.as_posix_thread() else {
+        return_errno_with_message!(Errno::ESRCH, "the current thread is not a POSIX thread");
+    };
+
+    let task_state = posix_thread.credentials().apparmor_task_state();
+    let target_state = lsm::apparmor_change_onexec_state(&task_state, profile_name)?;
+    posix_thread.set_apparmor_task_state(target_state);
+    Ok(())
 }
 
 /// Runs the LSM stack for an executable image check.

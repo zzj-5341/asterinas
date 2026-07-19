@@ -21,7 +21,8 @@ pub mod yama {
 pub mod apparmor {
     pub use super::modules::apparmor::{
         AppArmorMode, AppArmorPolicyOperation, AppArmorProfileName, AppArmorTaskState,
-        load_binary_policy, profile_summaries, remove_profile_by_name, root_namespace_name,
+        change_onexec_state, change_profile_state, load_binary_policy, profile_summaries,
+        remove_profile_by_name, root_namespace_name,
     };
 }
 
@@ -78,17 +79,7 @@ pub fn apparmor_task_state(posix_thread: &PosixThread) -> Option<AppArmorTaskSta
     is_apparmor_enabled().then(|| posix_thread.credentials().apparmor_task_state())
 }
 
-/// Returns summaries of the implicit and loaded AppArmor profiles.
-pub fn apparmor_profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
-    apparmor::profile_summaries()
-}
-
-/// Returns the root AppArmor policy namespace name.
-pub fn apparmor_root_namespace_name() -> &'static str {
-    apparmor::root_namespace_name()
-}
-
-/// Loads or replaces profiles from Linux AppArmor packed policy data.
+/// Loads, replaces, or removes an AppArmor profile from binary policy data.
 pub fn load_apparmor_binary_policy(
     policy: &[u8],
     expected_operation: AppArmorPolicyOperation,
@@ -99,6 +90,32 @@ pub fn load_apparmor_binary_policy(
 /// Removes a loaded AppArmor profile by name.
 pub fn remove_apparmor_profile_by_name(profile_name: &str) -> Result<()> {
     apparmor::remove_profile_by_name(profile_name)
+}
+
+/// Returns summaries of the implicit and loaded AppArmor profiles.
+pub fn apparmor_profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
+    apparmor::profile_summaries()
+}
+
+/// Returns the root AppArmor policy namespace name.
+pub fn apparmor_root_namespace_name() -> &'static str {
+    apparmor::root_namespace_name()
+}
+
+/// Creates task state after a mediated immediate AppArmor profile change.
+pub fn apparmor_change_profile_state(
+    task_state: &AppArmorTaskState,
+    profile_name: &str,
+) -> Result<AppArmorTaskState> {
+    apparmor::change_profile_state(task_state, profile_name)
+}
+
+/// Creates task state after a mediated AppArmor change-on-exec request.
+pub fn apparmor_change_onexec_state(
+    task_state: &AppArmorTaskState,
+    profile_name: Option<&str>,
+) -> Result<AppArmorTaskState> {
+    apparmor::change_onexec_state(task_state, profile_name)
 }
 
 pub(super) fn init() {

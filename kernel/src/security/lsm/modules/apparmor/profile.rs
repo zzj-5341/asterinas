@@ -6,6 +6,7 @@ use super::{
     dfa::{AppArmorDfaAccessOutcome, AppArmorDfaFilePolicy},
     path::{AppArmorExecTransition, AppArmorFilePermission, AppArmorPathRule, AppArmorPathView},
     state::AppArmorMode,
+    task::{AppArmorTaskAccessOutcome, AppArmorTaskPermission, AppArmorTaskPolicy},
 };
 use crate::{prelude::*, process::credentials::capabilities::CapSet};
 
@@ -22,6 +23,7 @@ impl AppArmorProfileName {
         if name.is_empty() {
             return_errno_with_message!(Errno::EINVAL, "the AppArmor profile name is empty");
         }
+
         Ok(Self(name))
     }
 
@@ -47,7 +49,7 @@ impl Default for AppArmorProfileName {
     }
 }
 
-/// An AppArmor profile and its enforcement policies.
+/// An AppArmor profile.
 #[derive(Clone, Debug)]
 pub struct AppArmorProfile {
     name: AppArmorProfileName,
@@ -55,10 +57,12 @@ pub struct AppArmorProfile {
     mode: AppArmorMode,
     file_policy: AppArmorFilePolicy,
     capability_policy: AppArmorCapabilityPolicy,
+    transition_policy: AppArmorProfileTransitionPolicy,
+    task_policy: AppArmorTaskPolicy,
 }
 
 impl AppArmorProfile {
-    /// Creates a profile backed by pathname rules.
+    /// Creates a profile.
     pub fn new(
         name: AppArmorProfileName,
         mode: AppArmorMode,
@@ -67,7 +71,7 @@ impl AppArmorProfile {
         Self::new_with_file_policy(name, mode, AppArmorFilePolicy::PathRules(file_rules))
     }
 
-    /// Creates a profile with an explicit file-policy backend.
+    /// Creates a profile with an explicit file policy backend.
     pub(super) fn new_with_file_policy(
         name: AppArmorProfileName,
         mode: AppArmorMode,
@@ -83,7 +87,7 @@ impl AppArmorProfile {
         )
     }
 
-    /// Creates a profile with attachment, file, and capability policies.
+    /// Creates a profile with explicit attachment and file policy backends.
     pub(super) fn new_with_policies(
         name: AppArmorProfileName,
         attachment: AppArmorAttachment,
@@ -91,12 +95,35 @@ impl AppArmorProfile {
         file_policy: AppArmorFilePolicy,
         capability_policy: AppArmorCapabilityPolicy,
     ) -> Self {
+        Self::new_with_transition_policy(
+            name,
+            attachment,
+            mode,
+            file_policy,
+            capability_policy,
+            AppArmorProfileTransitionPolicy::default(),
+            AppArmorTaskPolicy::default(),
+        )
+    }
+
+    /// Creates a profile with explicit policy backends and transition rules.
+    pub(super) fn new_with_transition_policy(
+        name: AppArmorProfileName,
+        attachment: AppArmorAttachment,
+        mode: AppArmorMode,
+        file_policy: AppArmorFilePolicy,
+        capability_policy: AppArmorCapabilityPolicy,
+        transition_policy: AppArmorProfileTransitionPolicy,
+        task_policy: AppArmorTaskPolicy,
+    ) -> Self {
         Self {
             name,
             attachment,
             mode,
             file_policy,
             capability_policy,
+            transition_policy,
+            task_policy,
         }
     }
 
@@ -108,6 +135,8 @@ impl AppArmorProfile {
             mode: AppArmorMode::Enforce,
             file_policy: AppArmorFilePolicy::PathRules(Vec::new()),
             capability_policy: AppArmorCapabilityPolicy::default(),
+            transition_policy: AppArmorProfileTransitionPolicy::default(),
+            task_policy: AppArmorTaskPolicy::default(),
         }
     }
 
@@ -155,14 +184,32 @@ impl AppArmorProfile {
             quiet: !denied.is_empty() && self.capability_policy.quiet().contains(denied),
         }
     }
+
+    /// Returns whether this profile allows changing to `target`.
+    pub fn allows_profile_transition(
+        &self,
+        target: &AppArmorProfileName,
+        kind: AppArmorProfileTransitionKind,
+    ) -> bool {
+        self.transition_policy.allows(target, kind)
+    }
+
+    /// Evaluates task-to-task access for this profile.
+    pub(super) fn evaluate_task_access(
+        &self,
+        peer_profile: &AppArmorProfileName,
+        permissions: AppArmorTaskPermission,
+    ) -> AppArmorTaskAccessOutcome {
+        self.task_policy.evaluate_access(peer_profile, permissions)
+    }
 }
 
 /// The file-policy backend used by an AppArmor profile.
 #[derive(Clone, Debug)]
 pub(super) enum AppArmorFilePolicy {
-    /// Path rules constructed by an in-kernel caller.
+    /// The temporary Asterinas text/debug loader rule list.
     PathRules(Vec<AppArmorPathRule>),
-    /// A Linux AppArmor DFA policy.
+    /// Linux AppArmor DFA policy decoded from binary policy.
     Dfa(Box<AppArmorDfaFilePolicy>),
 }
 
@@ -188,6 +235,44 @@ pub struct AppArmorCapabilityOutcome {
     pub audit: bool,
     /// Whether denied capabilities should be kept out of routine audit logs.
     pub quiet: bool,
+}
+
+/// A task profile transition requested through procfs attributes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppArmorProfileTransitionKind {
+    /// Immediately changes the current task profile.
+    ChangeProfile,
+    /// Sets the profile to apply at the next successful `execve`.
+    ChangeOnexec,
+}
+
+/// Profile-to-profile transition rules attached to an AppArmor profile.
+#[derive(Clone, Debug, Default)]
+pub(super) struct AppArmorProfileTransitionPolicy {
+    change_profile: Vec<AppArmorProfileName>,
+    change_onexec: Vec<AppArmorProfileName>,
+}
+
+impl AppArmorProfileTransitionPolicy {
+    /// Creates a profile transition policy.
+    pub(super) fn new(
+        change_profile: Vec<AppArmorProfileName>,
+        change_onexec: Vec<AppArmorProfileName>,
+    ) -> Self {
+        Self {
+            change_profile,
+            change_onexec,
+        }
+    }
+
+    fn allows(&self, target: &AppArmorProfileName, kind: AppArmorProfileTransitionKind) -> bool {
+        let allowed_targets = match kind {
+            AppArmorProfileTransitionKind::ChangeProfile => &self.change_profile,
+            AppArmorProfileTransitionKind::ChangeOnexec => &self.change_onexec,
+        };
+
+        allowed_targets.iter().any(|allowed| allowed == target)
+    }
 }
 
 impl From<AppArmorDfaAccessOutcome> for AppArmorFileAccessOutcome {
@@ -234,8 +319,9 @@ fn evaluate_path_rules(
         }
     }
 
+    let missing = permissions - allowed;
     AppArmorFileAccessOutcome {
-        denied: explicit_denied | (permissions - allowed),
+        denied: explicit_denied | missing,
         explicit_denied,
         exec_transition,
         audit,

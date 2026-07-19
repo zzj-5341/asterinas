@@ -212,6 +212,7 @@ impl SecurityFsInode {
                 SecurityFsEntry::new("abi", SecurityFsNodeKind::FeatureAbi),
                 SecurityFsEntry::new("policy", SecurityFsNodeKind::FeaturePolicyDir),
                 SecurityFsEntry::new("file", SecurityFsNodeKind::FeatureFileDir),
+                SecurityFsEntry::new("domain", SecurityFsNodeKind::FeatureDomainDir),
                 SecurityFsEntry::new("caps", SecurityFsNodeKind::FeatureCapsDir),
             ],
             SecurityFsNodeKind::FeaturePolicyDir => vec![
@@ -245,6 +246,17 @@ impl SecurityFsInode {
                     SecurityFsNodeKind::FeatureCapsMask,
                 )]
             }
+            SecurityFsNodeKind::FeatureDomainDir => vec![
+                SecurityFsEntry::new(
+                    "change_profile",
+                    SecurityFsNodeKind::FeatureDomainChangeProfile,
+                ),
+                SecurityFsEntry::new(
+                    "change_onexec",
+                    SecurityFsNodeKind::FeatureDomainChangeOnexec,
+                ),
+                SecurityFsEntry::new("version", SecurityFsNodeKind::FeatureDomainVersion),
+            ],
             _ => Vec::new(),
         }
     }
@@ -290,7 +302,9 @@ impl FileOps for SecurityFsInode {
             | SecurityFsNodeKind::FeaturePolicyVersionV6
             | SecurityFsNodeKind::FeaturePolicyVersionV7
             | SecurityFsNodeKind::FeaturePolicyVersionV8
-            | SecurityFsNodeKind::FeaturePolicyVersionV9 => {
+            | SecurityFsNodeKind::FeaturePolicyVersionV9
+            | SecurityFsNodeKind::FeatureDomainChangeProfile
+            | SecurityFsNodeKind::FeatureDomainChangeOnexec => {
                 writeln!(printer, "yes")?;
             }
             SecurityFsNodeKind::FeaturePolicyPermstable32 => {
@@ -310,6 +324,9 @@ impl FileOps for SecurityFsInode {
                     printer,
                     "chown dac_override dac_read_search fowner fsetid kill setgid setuid setpcap linux_immutable net_bind_service net_broadcast net_admin net_raw ipc_lock ipc_owner sys_module sys_rawio sys_chroot sys_ptrace sys_pacct sys_admin sys_boot sys_nice sys_resource sys_time sys_tty_config mknod lease audit_write audit_control setfcap mac_override mac_admin syslog wake_alarm block_suspend audit_read perfmon bpf checkpoint_restore"
                 )?;
+            }
+            SecurityFsNodeKind::FeatureDomainVersion => {
+                writeln!(printer, "1.2")?;
             }
             SecurityFsNodeKind::Load | SecurityFsNodeKind::Replace | SecurityFsNodeKind::Remove => {
                 return_errno_with_message!(Errno::EPERM, "the securityfs file is not readable");
@@ -580,6 +597,10 @@ enum SecurityFsNodeKind {
     FeatureFileMask,
     FeatureCapsDir,
     FeatureCapsMask,
+    FeatureDomainDir,
+    FeatureDomainChangeProfile,
+    FeatureDomainChangeOnexec,
+    FeatureDomainVersion,
 }
 
 impl SecurityFsNodeKind {
@@ -591,7 +612,8 @@ impl SecurityFsNodeKind {
             | Self::FeaturePolicyDir
             | Self::FeaturePolicyVersionsDir
             | Self::FeatureFileDir
-            | Self::FeatureCapsDir => InodeType::Dir,
+            | Self::FeatureCapsDir
+            | Self::FeatureDomainDir => InodeType::Dir,
             Self::Profiles
             | Self::Load
             | Self::Replace
@@ -606,7 +628,10 @@ impl SecurityFsNodeKind {
             | Self::FeaturePolicyVersionV8
             | Self::FeaturePolicyVersionV9
             | Self::FeatureFileMask
-            | Self::FeatureCapsMask => InodeType::File,
+            | Self::FeatureCapsMask
+            | Self::FeatureDomainChangeProfile
+            | Self::FeatureDomainChangeOnexec
+            | Self::FeatureDomainVersion => InodeType::File,
         }
     }
 
@@ -618,7 +643,8 @@ impl SecurityFsNodeKind {
             | Self::FeaturePolicyDir
             | Self::FeaturePolicyVersionsDir
             | Self::FeatureFileDir
-            | Self::FeatureCapsDir => mkmod!(a+rx),
+            | Self::FeatureCapsDir
+            | Self::FeatureDomainDir => mkmod!(a+rx),
             Self::Profiles
             | Self::FeatureAbi
             | Self::FeaturePolicySetLoad
@@ -630,7 +656,10 @@ impl SecurityFsNodeKind {
             | Self::FeaturePolicyVersionV8
             | Self::FeaturePolicyVersionV9
             | Self::FeatureFileMask
-            | Self::FeatureCapsMask => mkmod!(a+r),
+            | Self::FeatureCapsMask
+            | Self::FeatureDomainChangeProfile
+            | Self::FeatureDomainChangeOnexec
+            | Self::FeatureDomainVersion => mkmod!(a+r),
             Self::Load | Self::Replace | Self::Remove => mkmod!(u+w),
         }
     }
