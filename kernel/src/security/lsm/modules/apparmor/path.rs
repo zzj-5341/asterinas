@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use super::profile::AppArmorProfileName;
 use crate::{
     fs::{
         file::{AccessMode, StatusFlags},
@@ -49,12 +50,13 @@ impl AppArmorFilePermission {
         if access_mode.is_readable() {
             permissions |= Self::READ;
         }
+
         if access_mode.is_writable() {
-            permissions |= if status_flags.contains(StatusFlags::O_APPEND) {
-                Self::APPEND
+            if status_flags.contains(StatusFlags::O_APPEND) {
+                permissions |= Self::APPEND;
             } else {
-                Self::WRITE
-            };
+                permissions |= Self::WRITE;
+            }
         }
 
         permissions
@@ -82,6 +84,7 @@ impl AppArmorFilePermission {
         if let Some(access_mode) = access_mode {
             permissions |= Self::from_open(access_mode, status_flags);
         }
+
         permissions
     }
 
@@ -94,27 +97,27 @@ impl AppArmorFilePermission {
         permissions
     }
 
-    /// Creates permissions requested on the source of a link operation.
+    /// Creates file permissions requested on the source of a link operation.
     pub fn for_link_source() -> Self {
         Self::LINK
     }
 
-    /// Creates permissions requested on the target of a link operation.
+    /// Creates file permissions requested on the target of a link operation.
     pub fn for_link_target() -> Self {
         Self::CREATE | Self::LINK
     }
 
-    /// Creates permissions requested on the source of a rename operation.
+    /// Creates file permissions requested on the source of a rename operation.
     pub fn for_rename_source() -> Self {
         Self::DELETE | Self::RENAME
     }
 
-    /// Creates permissions requested on the target of a rename operation.
+    /// Creates file permissions requested on the target of a rename operation.
     pub fn for_rename_target() -> Self {
         Self::CREATE | Self::RENAME
     }
 
-    /// Creates permissions requested by an attribute-change operation.
+    /// Creates file permissions requested by an attribute-change operation.
     pub fn for_setattr(kind: FileSetattrKind) -> Self {
         match kind {
             FileSetattrKind::Mode
@@ -124,7 +127,7 @@ impl AppArmorFilePermission {
         }
     }
 
-    /// Converts generic LSM file permissions into AppArmor permissions.
+    /// Creates file permissions from generic LSM file permissions.
     pub fn from_file_permission(permissions: FilePermission) -> Self {
         let mut apparmor_permissions = Self::empty();
 
@@ -146,6 +149,95 @@ impl AppArmorFilePermission {
 
         apparmor_permissions
     }
+
+    /// Converts Linux AppArmor permission bits into local file permissions.
+    pub(super) fn from_linux_bits(bits: u32) -> Self {
+        let mut permissions = Self::empty();
+
+        if bits & linux_file_permission::READ != 0 {
+            permissions |= Self::READ;
+        }
+        if bits & linux_file_permission::WRITE != 0 {
+            permissions |= Self::WRITE;
+        }
+        if bits & linux_file_permission::EXECUTE != 0 {
+            permissions |= Self::EXECUTE;
+        }
+        if bits & linux_file_permission::APPEND != 0 {
+            permissions |= Self::APPEND;
+        }
+        if bits & linux_file_permission::MMAP != 0 {
+            permissions |= Self::MMAP;
+        }
+        if bits & linux_file_permission::CREATE != 0 {
+            permissions |= Self::CREATE;
+        }
+        if bits & linux_file_permission::DELETE != 0 {
+            permissions |= Self::DELETE;
+        }
+        if bits & linux_file_permission::RENAME != 0 {
+            permissions |= Self::RENAME;
+        }
+        if bits & linux_file_permission::SETATTR != 0 {
+            permissions |= Self::SETATTR;
+        }
+        if bits & linux_file_permission::LINK != 0 {
+            permissions |= Self::LINK;
+        }
+
+        permissions
+    }
+
+    /// Converts local file permissions into Linux AppArmor permission bits.
+    pub(super) fn to_linux_bits(self) -> u32 {
+        let mut bits = 0;
+
+        if self.contains(Self::READ) {
+            bits |= linux_file_permission::READ;
+        }
+        if self.contains(Self::WRITE) {
+            bits |= linux_file_permission::WRITE;
+        }
+        if self.contains(Self::EXECUTE) {
+            bits |= linux_file_permission::EXECUTE;
+        }
+        if self.contains(Self::APPEND) {
+            bits |= linux_file_permission::APPEND;
+        }
+        if self.contains(Self::MMAP) {
+            bits |= linux_file_permission::MMAP;
+        }
+        if self.contains(Self::CREATE) {
+            bits |= linux_file_permission::CREATE;
+        }
+        if self.contains(Self::DELETE) {
+            bits |= linux_file_permission::DELETE;
+        }
+        if self.contains(Self::RENAME) {
+            bits |= linux_file_permission::RENAME;
+        }
+        if self.contains(Self::SETATTR) {
+            bits |= linux_file_permission::SETATTR;
+        }
+        if self.contains(Self::LINK) {
+            bits |= linux_file_permission::LINK;
+        }
+
+        bits
+    }
+}
+
+mod linux_file_permission {
+    pub(super) const EXECUTE: u32 = 1 << 0;
+    pub(super) const WRITE: u32 = 1 << 1;
+    pub(super) const READ: u32 = 1 << 2;
+    pub(super) const APPEND: u32 = 1 << 3;
+    pub(super) const CREATE: u32 = 0x0010;
+    pub(super) const DELETE: u32 = 0x0020;
+    pub(super) const RENAME: u32 = 0x0080;
+    pub(super) const SETATTR: u32 = 0x0100;
+    pub(super) const MMAP: u32 = 0x0001_0000;
+    pub(super) const LINK: u32 = 0x0004_0000;
 }
 
 /// A path as seen through a task's current filesystem root.
@@ -216,26 +308,108 @@ impl AppArmorPathPattern {
     }
 }
 
+/// The profile transition to apply after a successful executable image load.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AppArmorExecTransition {
+    /// Keeps the current profile.
+    Inherit,
+    /// Switches to the unconfined profile.
+    Unconfined {
+        /// The exec mode requested by the rule qualifier.
+        mode: AppArmorExecMode,
+    },
+    /// Switches to a named profile.
+    Profile {
+        /// The profile selected by the rule qualifier.
+        profile_name: AppArmorProfileName,
+        /// The exec mode requested by the rule qualifier.
+        mode: AppArmorExecMode,
+    },
+    /// Switches to a child profile.
+    Child {
+        /// The child profile selected by the rule qualifier.
+        profile_name: AppArmorProfileName,
+        /// The exec mode requested by the rule qualifier.
+        mode: AppArmorExecMode,
+    },
+}
+
+/// The safety mode requested by an AppArmor exec qualifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppArmorExecMode {
+    /// Lowercase qualifiers such as `px`, `cx`, and `ux`.
+    Unsafe,
+    /// Uppercase qualifiers such as `Px`, `Cx`, and `Ux`.
+    Safe,
+}
+
+impl AppArmorExecTransition {
+    /// Creates an unconfined transition.
+    pub fn unconfined(mode: AppArmorExecMode) -> Self {
+        Self::Unconfined { mode }
+    }
+
+    /// Creates a named-profile transition.
+    pub fn profile(profile_name: AppArmorProfileName, mode: AppArmorExecMode) -> Self {
+        Self::Profile { profile_name, mode }
+    }
+
+    /// Creates a child-profile transition.
+    pub fn child(profile_name: AppArmorProfileName, mode: AppArmorExecMode) -> Self {
+        Self::Child { profile_name, mode }
+    }
+
+    /// Returns the target profile name for transitions that change profile.
+    pub fn target_profile(&self) -> Option<AppArmorProfileName> {
+        match self {
+            Self::Inherit => None,
+            Self::Unconfined { .. } => Some(AppArmorProfileName::new_unconfined()),
+            Self::Profile { profile_name, .. } | Self::Child { profile_name, .. } => {
+                Some(profile_name.clone())
+            }
+        }
+    }
+
+    /// Returns whether this transition requested safe exec handling.
+    pub const fn requires_secure_exec(&self) -> bool {
+        matches!(
+            self,
+            Self::Unconfined {
+                mode: AppArmorExecMode::Safe
+            } | Self::Profile {
+                mode: AppArmorExecMode::Safe,
+                ..
+            } | Self::Child {
+                mode: AppArmorExecMode::Safe,
+                ..
+            }
+        )
+    }
+}
+
 /// A file rule keyed by an AppArmor path pattern.
 #[derive(Clone, Debug)]
 pub struct AppArmorPathRule {
     pattern: AppArmorPathPattern,
     permissions: AppArmorFilePermission,
+    exec_transition: AppArmorExecTransition,
     audit: bool,
     deny: bool,
 }
 
 impl AppArmorPathRule {
-    /// Creates a path rule.
-    pub fn new(
+    /// Creates a path rule with an executable transition.
+    pub fn new_with_transition(
         pattern: AppArmorPathPattern,
         permissions: AppArmorFilePermission,
+        exec_transition: AppArmorExecTransition,
         audit: bool,
         deny: bool,
     ) -> Self {
         Self {
             pattern,
             permissions,
+            exec_transition,
             audit,
             deny,
         }
@@ -244,6 +418,11 @@ impl AppArmorPathRule {
     /// Returns the rule permissions.
     pub fn permissions(&self) -> AppArmorFilePermission {
         self.permissions
+    }
+
+    /// Returns the executable transition.
+    pub fn exec_transition(&self) -> &AppArmorExecTransition {
+        &self.exec_transition
     }
 
     /// Returns whether this rule matches a path.

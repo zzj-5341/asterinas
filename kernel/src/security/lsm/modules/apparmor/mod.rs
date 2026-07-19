@@ -3,6 +3,7 @@
 //! AppArmor major-LSM policy model.
 
 mod capability;
+mod dfa;
 mod label;
 mod namespace;
 mod path;
@@ -17,10 +18,12 @@ pub use self::{
     state::{AppArmorMode, AppArmorTaskState},
 };
 use super::super::{
-    LsmFlags, LsmModule,
+    CapableContext, FileCreateContext, FileDeleteContext, FileGetattrContext, FileLinkContext,
+    FileLockContext, FileMmapContext, FileOpenContext, FilePermissionContext, FileReceiveContext,
+    FileRenameContext, FileSetattrContext, LsmFlags, LsmModule,
     hooks::{LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook, LsmSignalHook},
 };
-use crate::prelude::*;
+use crate::{prelude::*, process::posix_thread::AsPosixThread, thread::Thread};
 
 pub(super) static APPARMOR_LSM: AppArmorLsm = AppArmorLsm;
 
@@ -41,9 +44,136 @@ impl LsmModule for AppArmorLsm {
 
 impl LsmAlienAccessHook for AppArmorLsm {}
 impl LsmBprmHook for AppArmorLsm {}
-impl LsmCapabilityHook for AppArmorLsm {}
-impl LsmFileHook for AppArmorLsm {}
 impl LsmSignalHook for AppArmorLsm {}
+
+impl LsmCapabilityHook for AppArmorLsm {
+    fn on_capable(&self, context: &CapableContext<'_>) -> Result<()> {
+        let task_state = context.posix_thread().credentials().apparmor_task_state();
+        POLICY.check_capability(&task_state, context.required_cap())
+    }
+}
+
+impl LsmFileHook for AppArmorLsm {
+    fn on_file_create(&self, context: &FileCreateContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_create(&task_state, context)
+    }
+
+    fn on_file_delete(&self, context: &FileDeleteContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_delete(
+            &task_state,
+            context.path_resolver(),
+            context.parent(),
+            context.name(),
+            context.kind(),
+        )
+    }
+
+    fn on_file_link(&self, context: &FileLinkContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_link(
+            &task_state,
+            context.path_resolver(),
+            context.source(),
+            context.target_parent(),
+            context.target_name(),
+        )
+    }
+
+    fn on_file_open(&self, context: &FileOpenContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_open(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.access_mode(),
+            context.status_flags(),
+        )
+    }
+
+    fn on_file_rename(&self, context: &FileRenameContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_rename(&task_state, context)
+    }
+
+    fn on_file_setattr(&self, context: &FileSetattrContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_setattr(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.kind(),
+        )
+    }
+
+    fn on_file_permission(&self, context: &FilePermissionContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_permission(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.permissions(),
+        )
+    }
+
+    fn on_file_mmap(&self, context: &FileMmapContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_mmap(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.permissions(),
+        )
+    }
+
+    fn on_file_receive(&self, context: &FileReceiveContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_receive(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.permissions(),
+        )
+    }
+
+    fn on_file_lock(&self, context: &FileLockContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_lock(
+            &task_state,
+            context.path_resolver(),
+            context.path(),
+            context.permissions(),
+        )
+    }
+
+    fn on_file_getattr(&self, context: &FileGetattrContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+        POLICY.check_file_getattr(&task_state, context.path_resolver(), context.path())
+    }
+}
 
 #[expect(dead_code, reason = "policy loaders are added with management ABIs")]
 fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {
@@ -75,4 +205,10 @@ pub fn profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
 /// Returns the root AppArmor policy namespace name.
 pub fn root_namespace_name() -> &'static str {
     POLICY.root_namespace_name()
+}
+
+fn current_task_state() -> Option<AppArmorTaskState> {
+    Thread::current()?
+        .as_posix_thread()
+        .map(|thread| thread.credentials().apparmor_task_state())
 }
