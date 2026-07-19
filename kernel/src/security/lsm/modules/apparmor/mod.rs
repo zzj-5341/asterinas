@@ -2,6 +2,8 @@
 
 //! AppArmor major-LSM policy model.
 
+mod attachment;
+mod binary;
 mod capability;
 mod dfa;
 mod label;
@@ -12,11 +14,12 @@ mod policy_update;
 mod profile;
 mod state;
 
-use self::{policy::AppArmorPolicy, policy_update::AppArmorPolicyUpdate};
 pub use self::{
+    binary::AppArmorPolicyOperation,
     profile::AppArmorProfileName,
     state::{AppArmorMode, AppArmorTaskState},
 };
+use self::{policy::AppArmorPolicy, policy_update::AppArmorPolicyUpdate};
 use super::super::{
     CapableContext, FileCreateContext, FileDeleteContext, FileGetattrContext, FileLinkContext,
     FileLockContext, FileMmapContext, FileOpenContext, FilePermissionContext, FileReceiveContext,
@@ -175,7 +178,6 @@ impl LsmFileHook for AppArmorLsm {
     }
 }
 
-#[expect(dead_code, reason = "policy loaders are added with management ABIs")]
 fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {
     match update {
         AppArmorPolicyUpdate::Replace(profile) => {
@@ -195,6 +197,30 @@ fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Loads or replaces profiles from Linux AppArmor packed policy data.
+pub fn load_binary_policy(
+    policy: &[u8],
+    expected_operation: AppArmorPolicyOperation,
+) -> Result<()> {
+    apply_policy_update(binary::unpack_binary_policy(policy, expected_operation)?)
+}
+
+/// Removes a loaded AppArmor profile by name.
+pub fn remove_profile_by_name(profile_name: &str) -> Result<()> {
+    let profile_name = AppArmorProfileName::new(profile_name.to_string())?;
+    if profile_name.is_unconfined() {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "the implicit unconfined AppArmor profile cannot be removed"
+        );
+    }
+    if POLICY.remove_profile(&profile_name).is_none() {
+        return_errno_with_message!(Errno::ENOENT, "the AppArmor profile is not loaded");
+    }
+
+    Ok(())
 }
 
 /// Returns summaries of the implicit and loaded AppArmor profiles.

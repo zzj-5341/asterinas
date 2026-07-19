@@ -288,22 +288,31 @@ impl AppArmorPolicy {
         };
         let outcome = profile.evaluate_capability_access(required_cap);
         if outcome.denied.is_empty() {
+            if outcome.audit {
+                info!(
+                    "AppArmor audited capability use: profile={} requested={:#x}",
+                    profile.name().as_str(),
+                    required_cap.bits()
+                );
+            }
             return Ok(());
         }
 
         let mode = effective_mode(task_state.mode(), profile.mode());
-        let message = if mode == AppArmorMode::Complain {
-            "AppArmor would deny capability use"
-        } else {
-            "AppArmor denied capability use"
-        };
-        warn!(
-            "{}: profile={} requested={:#x} denied={:#x}",
-            message,
-            profile.name().as_str(),
-            required_cap.bits(),
-            outcome.denied.bits()
-        );
+        if outcome.audit || !outcome.quiet {
+            let message = if mode == AppArmorMode::Complain {
+                "AppArmor would deny capability use"
+            } else {
+                "AppArmor denied capability use"
+            };
+            warn!(
+                "{}: profile={} requested={:#x} denied={:#x}",
+                message,
+                profile.name().as_str(),
+                required_cap.bits(),
+                outcome.denied.bits()
+            );
+        }
         if mode == AppArmorMode::Complain {
             return Ok(());
         }
@@ -379,23 +388,33 @@ impl AppArmorPolicy {
 
         let outcome = profile.evaluate_file_access(path_view, permissions)?;
         if outcome.denied.is_empty() {
+            if outcome.audit {
+                info!(
+                    "AppArmor audited file access: profile={} path={} requested={:#x}",
+                    profile.name().as_str(),
+                    path_view.as_str(),
+                    permissions.bits()
+                );
+            }
             return Ok(());
         }
 
         let enforce_denial = mode != AppArmorMode::Complain || !outcome.explicit_denied.is_empty();
-        let message = if enforce_denial {
-            "AppArmor denied file access"
-        } else {
-            "AppArmor would deny file access"
-        };
-        warn!(
-            "{}: profile={} path={} requested={:#x} denied={:#x}",
-            message,
-            profile.name().as_str(),
-            path_view.as_str(),
-            permissions.bits(),
-            outcome.denied.bits()
-        );
+        if outcome.audit || !outcome.quiet {
+            let message = if enforce_denial {
+                "AppArmor denied file access"
+            } else {
+                "AppArmor would deny file access"
+            };
+            warn!(
+                "{}: profile={} path={} requested={:#x} denied={:#x}",
+                message,
+                profile.name().as_str(),
+                path_view.as_str(),
+                permissions.bits(),
+                outcome.denied.bits()
+            );
+        }
         if !enforce_denial {
             return Ok(());
         }

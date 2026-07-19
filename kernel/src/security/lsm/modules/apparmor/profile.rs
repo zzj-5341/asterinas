@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::{
+    attachment::AppArmorAttachment,
     capability::AppArmorCapabilityPolicy,
     dfa::{AppArmorDfaAccessOutcome, AppArmorDfaFilePolicy},
-    path::{AppArmorFilePermission, AppArmorPathRule, AppArmorPathView},
+    path::{AppArmorExecTransition, AppArmorFilePermission, AppArmorPathRule, AppArmorPathView},
     state::AppArmorMode,
 };
 use crate::{prelude::*, process::credentials::capabilities::CapSet};
@@ -50,6 +51,7 @@ impl Default for AppArmorProfileName {
 #[derive(Clone, Debug)]
 pub struct AppArmorProfile {
     name: AppArmorProfileName,
+    attachment: AppArmorAttachment,
     mode: AppArmorMode,
     file_policy: AppArmorFilePolicy,
     capability_policy: AppArmorCapabilityPolicy,
@@ -71,18 +73,27 @@ impl AppArmorProfile {
         mode: AppArmorMode,
         file_policy: AppArmorFilePolicy,
     ) -> Self {
-        Self::new_with_policies(name, mode, file_policy, AppArmorCapabilityPolicy::default())
+        let attachment = AppArmorAttachment::from_profile(&name, None, None);
+        Self::new_with_policies(
+            name,
+            attachment,
+            mode,
+            file_policy,
+            AppArmorCapabilityPolicy::default(),
+        )
     }
 
-    /// Creates a profile with file and capability policies.
+    /// Creates a profile with attachment, file, and capability policies.
     pub(super) fn new_with_policies(
         name: AppArmorProfileName,
+        attachment: AppArmorAttachment,
         mode: AppArmorMode,
         file_policy: AppArmorFilePolicy,
         capability_policy: AppArmorCapabilityPolicy,
     ) -> Self {
         Self {
             name,
+            attachment,
             mode,
             file_policy,
             capability_policy,
@@ -91,11 +102,13 @@ impl AppArmorProfile {
 
     /// Creates the default unconfined profile.
     pub fn new_unconfined() -> Self {
-        Self::new(
-            AppArmorProfileName::new_unconfined(),
-            AppArmorMode::Enforce,
-            Vec::new(),
-        )
+        Self {
+            name: AppArmorProfileName::new_unconfined(),
+            attachment: AppArmorAttachment::new(None, None),
+            mode: AppArmorMode::Enforce,
+            file_policy: AppArmorFilePolicy::PathRules(Vec::new()),
+            capability_policy: AppArmorCapabilityPolicy::default(),
+        }
     }
 
     /// Returns the profile name.
@@ -106,6 +119,11 @@ impl AppArmorProfile {
     /// Returns the profile mode.
     pub fn mode(&self) -> AppArmorMode {
         self.mode
+    }
+
+    /// Returns whether this profile is attached to a path.
+    pub(super) fn matches_attachment(&self, path_view: &AppArmorPathView) -> bool {
+        self.attachment.matches(path_view)
     }
 
     /// Evaluates file access for this profile.
@@ -131,7 +149,11 @@ impl AppArmorProfile {
         } else {
             capabilities
         };
-        AppArmorCapabilityOutcome { denied }
+        AppArmorCapabilityOutcome {
+            denied,
+            audit: !(capabilities & self.capability_policy.audit()).is_empty(),
+            quiet: !denied.is_empty() && self.capability_policy.quiet().contains(denied),
+        }
     }
 }
 
@@ -150,12 +172,22 @@ pub struct AppArmorFileAccessOutcome {
     pub denied: AppArmorFilePermission,
     /// Permissions denied by an explicit `deny` rule.
     pub explicit_denied: AppArmorFilePermission,
+    /// Executable profile transition selected by the matching rule.
+    pub exec_transition: AppArmorExecTransition,
+    /// Whether matching permissions requested auditing.
+    pub audit: bool,
+    /// Whether denied permissions should be kept out of routine audit logs.
+    pub quiet: bool,
 }
 
 /// A capability-access decision from a profile.
 pub struct AppArmorCapabilityOutcome {
     /// Capabilities denied by the policy.
     pub denied: CapSet,
+    /// Whether the capability request should be audited.
+    pub audit: bool,
+    /// Whether denied capabilities should be kept out of routine audit logs.
+    pub quiet: bool,
 }
 
 impl From<AppArmorDfaAccessOutcome> for AppArmorFileAccessOutcome {
@@ -163,6 +195,9 @@ impl From<AppArmorDfaAccessOutcome> for AppArmorFileAccessOutcome {
         Self {
             denied: outcome.denied,
             explicit_denied: outcome.explicit_denied,
+            exec_transition: outcome.exec_transition,
+            audit: outcome.audit,
+            quiet: outcome.quiet,
         }
     }
 }
@@ -174,6 +209,8 @@ fn evaluate_path_rules(
 ) -> AppArmorFileAccessOutcome {
     let mut allowed = AppArmorFilePermission::empty();
     let mut explicit_denied = AppArmorFilePermission::empty();
+    let mut exec_transition = AppArmorExecTransition::Inherit;
+    let mut audit = false;
 
     for rule in rules {
         if !rule.matches(path_view) {
@@ -185,15 +222,23 @@ fn evaluate_path_rules(
             continue;
         }
 
+        audit |= rule.audit();
         if rule.deny() {
             explicit_denied |= matched_permissions;
-        } else {
-            allowed |= matched_permissions;
+            continue;
+        }
+
+        allowed |= matched_permissions;
+        if matched_permissions.contains(AppArmorFilePermission::EXECUTE) {
+            exec_transition = rule.exec_transition().clone();
         }
     }
 
     AppArmorFileAccessOutcome {
         denied: explicit_denied | (permissions - allowed),
         explicit_denied,
+        exec_transition,
+        audit,
+        quiet: false,
     }
 }
