@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! AppArmor major-LSM policy model.
+//! AppArmor-like major LSM.
 
 mod attachment;
 mod binary;
@@ -13,6 +13,7 @@ mod policy;
 mod policy_update;
 mod profile;
 mod state;
+mod task;
 
 pub use self::{
     binary::AppArmorPolicyOperation,
@@ -21,10 +22,14 @@ pub use self::{
 };
 use self::{policy::AppArmorPolicy, policy_update::AppArmorPolicyUpdate};
 use super::super::{
-    CapableContext, FileCreateContext, FileDeleteContext, FileGetattrContext, FileLinkContext,
-    FileLockContext, FileMmapContext, FileOpenContext, FilePermissionContext, FileReceiveContext,
-    FileRenameContext, FileSetattrContext, LsmFlags, LsmModule,
-    hooks::{LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook, LsmSignalHook},
+    BprmCheckContext, BprmCommittedCredsContext, CapableContext, FileCreateContext,
+    FileDeleteContext, FileGetattrContext, FileLinkContext, FileLockContext, FileMmapContext,
+    FileOpenContext, FilePermissionContext, FileReceiveContext, FileRenameContext,
+    FileSetattrContext, LsmFlags, LsmModule,
+    hooks::{
+        AlienAccessContext, LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook,
+        LsmSignalHook, SignalContext,
+    },
 };
 use crate::{prelude::*, process::posix_thread::AsPosixThread, thread::Thread};
 
@@ -32,7 +37,7 @@ pub(super) static APPARMOR_LSM: AppArmorLsm = AppArmorLsm;
 
 static POLICY: AppArmorPolicy = AppArmorPolicy::new();
 
-/// The AppArmor major LSM.
+/// An AppArmor-like major LSM.
 pub(super) struct AppArmorLsm;
 
 impl LsmModule for AppArmorLsm {
@@ -45,9 +50,45 @@ impl LsmModule for AppArmorLsm {
     }
 }
 
-impl LsmAlienAccessHook for AppArmorLsm {}
-impl LsmBprmHook for AppArmorLsm {}
-impl LsmSignalHook for AppArmorLsm {}
+impl LsmAlienAccessHook for AppArmorLsm {
+    fn on_alien_access(&self, context: &AlienAccessContext<'_>) -> Result<()> {
+        let accessor_state = context.accessor().credentials().apparmor_task_state();
+        let target_state = context.target().credentials().apparmor_task_state();
+
+        POLICY.check_alien_access(&accessor_state, &target_state, context.mode())
+    }
+}
+
+impl LsmBprmHook for AppArmorLsm {
+    fn on_bprm_check_security(&self, context: &BprmCheckContext<'_>) -> Result<()> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(());
+        };
+
+        POLICY.check_execute(&task_state, context.path_resolver(), context.executable())
+    }
+
+    fn on_bprm_committed_creds(&self, context: &BprmCommittedCredsContext<'_>) -> Result<()> {
+        let task_state = context.credentials().apparmor_task_state();
+        let new_task_state = POLICY.committed_exec_state(
+            &task_state,
+            context.path_resolver(),
+            context.executable(),
+        )?;
+        context
+            .credentials()
+            .set_apparmor_task_state(new_task_state);
+        Ok(())
+    }
+
+    fn on_bprm_secureexec(&self, context: &BprmCheckContext<'_>) -> Result<bool> {
+        let Some(task_state) = current_task_state() else {
+            return Ok(false);
+        };
+
+        POLICY.requires_secure_exec(&task_state, context.path_resolver(), context.executable())
+    }
+}
 
 impl LsmCapabilityHook for AppArmorLsm {
     fn on_capable(&self, context: &CapableContext<'_>) -> Result<()> {
@@ -56,11 +97,21 @@ impl LsmCapabilityHook for AppArmorLsm {
     }
 }
 
+impl LsmSignalHook for AppArmorLsm {
+    fn on_signal(&self, context: &SignalContext<'_>) -> Result<()> {
+        let sender_state = context.sender().credentials().apparmor_task_state();
+        let target_state = context.target().credentials().apparmor_task_state();
+
+        POLICY.check_signal(&sender_state, &target_state, context.signum())
+    }
+}
+
 impl LsmFileHook for AppArmorLsm {
     fn on_file_create(&self, context: &FileCreateContext<'_>) -> Result<()> {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_create(&task_state, context)
     }
 
@@ -68,6 +119,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_delete(
             &task_state,
             context.path_resolver(),
@@ -81,6 +133,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_link(
             &task_state,
             context.path_resolver(),
@@ -94,6 +147,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_open(
             &task_state,
             context.path_resolver(),
@@ -107,6 +161,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_rename(&task_state, context)
     }
 
@@ -114,6 +169,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_setattr(
             &task_state,
             context.path_resolver(),
@@ -126,6 +182,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_permission(
             &task_state,
             context.path_resolver(),
@@ -138,6 +195,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_mmap(
             &task_state,
             context.path_resolver(),
@@ -150,6 +208,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_receive(
             &task_state,
             context.path_resolver(),
@@ -162,6 +221,7 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_lock(
             &task_state,
             context.path_resolver(),
@@ -174,8 +234,17 @@ impl LsmFileHook for AppArmorLsm {
         let Some(task_state) = current_task_state() else {
             return Ok(());
         };
+
         POLICY.check_file_getattr(&task_state, context.path_resolver(), context.path())
     }
+}
+
+/// Loads, replaces, or removes an AppArmor profile from binary policy data.
+pub fn load_binary_policy(
+    policy: &[u8],
+    expected_operation: AppArmorPolicyOperation,
+) -> Result<()> {
+    apply_policy_update(binary::unpack_binary_policy(policy, expected_operation)?)
 }
 
 fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {
@@ -199,12 +268,34 @@ fn apply_policy_update(update: AppArmorPolicyUpdate) -> Result<()> {
     }
 }
 
-/// Loads or replaces profiles from Linux AppArmor packed policy data.
-pub fn load_binary_policy(
-    policy: &[u8],
-    expected_operation: AppArmorPolicyOperation,
-) -> Result<()> {
-    apply_policy_update(binary::unpack_binary_policy(policy, expected_operation)?)
+/// Returns summaries of the implicit and loaded AppArmor profiles.
+pub fn profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
+    POLICY.profile_summaries()
+}
+
+/// Returns the root AppArmor policy namespace name.
+pub fn root_namespace_name() -> &'static str {
+    POLICY.root_namespace_name()
+}
+
+/// Creates task state after a mediated immediate profile change.
+pub fn change_profile_state(
+    task_state: &AppArmorTaskState,
+    profile_name: &str,
+) -> Result<AppArmorTaskState> {
+    let profile_name = AppArmorProfileName::new(profile_name.to_string())?;
+    POLICY.change_profile_state(task_state, profile_name)
+}
+
+/// Creates task state after a mediated change-on-exec request.
+pub fn change_onexec_state(
+    task_state: &AppArmorTaskState,
+    profile_name: Option<&str>,
+) -> Result<AppArmorTaskState> {
+    let profile_name = profile_name
+        .map(|profile_name| AppArmorProfileName::new(profile_name.to_string()))
+        .transpose()?;
+    POLICY.change_onexec_state(task_state, profile_name)
 }
 
 /// Removes a loaded AppArmor profile by name.
@@ -221,16 +312,6 @@ pub fn remove_profile_by_name(profile_name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Returns summaries of the implicit and loaded AppArmor profiles.
-pub fn profile_summaries() -> Vec<(AppArmorProfileName, AppArmorMode)> {
-    POLICY.profile_summaries()
-}
-
-/// Returns the root AppArmor policy namespace name.
-pub fn root_namespace_name() -> &'static str {
-    POLICY.root_namespace_name()
 }
 
 fn current_task_state() -> Option<AppArmorTaskState> {
