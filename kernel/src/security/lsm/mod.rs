@@ -7,8 +7,9 @@
 //! inspect common hook contexts before allowing or rejecting an operation.
 //!
 //! This module defines the common LSM traits and hook contexts shared by
-//! built-in modules such as `capability` and `yama`. Module selection follows
-//! the `lsm=` and legacy `security=` kernel command-line parameters.
+//! built-in modules such as `capability` and `yama`. Module
+//! selection follows the `lsm=` and legacy `security=` kernel command-line
+//! parameters.
 
 pub mod hooks;
 mod modules;
@@ -17,7 +18,16 @@ pub mod yama {
     pub use super::modules::yama::{YamaScope, get_scope, set_scope};
 }
 
-use self::hooks::{LsmAlienAccessHook, LsmCapabilityHook};
+use self::hooks::{LsmAlienAccessHook, LsmBprmHook, LsmCapabilityHook, LsmFileHook, LsmSignalHook};
+pub use self::{
+    hooks::{
+        BprmCheckContext, BprmCommittedCredsContext, CapableContext, FileCreateContext,
+        FileCreateKind, FileDeleteContext, FileDeleteKind, FileGetattrContext, FileLinkContext,
+        FileLockContext, FileMmapContext, FileOpenContext, FilePermission, FilePermissionContext,
+        FileReceiveContext, FileRenameContext, FileSetattrContext, FileSetattrKind,
+    },
+    yama::YamaScope,
+};
 use crate::prelude::*;
 
 bitflags! {
@@ -31,7 +41,9 @@ bitflags! {
 }
 
 /// The common interface for built-in LSM modules.
-trait LsmModule: LsmAlienAccessHook + LsmCapabilityHook + Sync {
+trait LsmModule:
+    LsmAlienAccessHook + LsmBprmHook + LsmCapabilityHook + LsmFileHook + LsmSignalHook + Sync
+{
     /// Returns the module name.
     fn name(&self) -> &'static str;
 
@@ -50,4 +62,79 @@ pub(super) fn init() {
     for module in modules::active_modules() {
         info!("[kernel] LSM module enabled: {}", module.name());
     }
+}
+
+/// Runs the LSM stack for a capability check.
+pub fn capable(context: CapableContext<'_>) -> Result<()> {
+    hooks::on_capable(context)
+}
+
+/// Runs the LSM stack for an executable image check.
+pub fn bprm_check_security(context: &BprmCheckContext<'_>) -> Result<()> {
+    hooks::on_bprm_check_security(context)
+}
+
+/// Runs the LSM stack after executable credentials are committed.
+pub fn bprm_committed_creds(context: &BprmCommittedCredsContext<'_>) -> Result<()> {
+    hooks::on_bprm_committed_creds(context)
+}
+
+/// Returns whether the executable should run in secure-execution mode.
+pub fn bprm_secureexec(context: &BprmCheckContext<'_>) -> Result<bool> {
+    hooks::on_bprm_secureexec(context)
+}
+
+/// Runs the LSM stack for a file open check.
+pub fn file_open(context: &FileOpenContext<'_>) -> Result<()> {
+    hooks::on_file_open(context)
+}
+
+/// Runs the LSM stack for a file creation check.
+pub fn file_create(context: &FileCreateContext<'_>) -> Result<()> {
+    hooks::on_file_create(context)
+}
+
+/// Runs the LSM stack for a file deletion check.
+pub fn file_delete(context: &FileDeleteContext<'_>) -> Result<()> {
+    hooks::on_file_delete(context)
+}
+
+/// Runs the LSM stack for a file link check.
+pub fn file_link(context: &FileLinkContext<'_>) -> Result<()> {
+    hooks::on_file_link(context)
+}
+
+/// Runs the LSM stack for a file rename check.
+pub fn file_rename(context: &FileRenameContext<'_>) -> Result<()> {
+    hooks::on_file_rename(context)
+}
+
+/// Runs the LSM stack for a file attribute-change check.
+pub fn file_setattr(context: &FileSetattrContext<'_>) -> Result<()> {
+    hooks::on_file_setattr(context)
+}
+
+/// Runs the LSM stack for a file permission revalidation check.
+pub fn file_permission(context: &FilePermissionContext<'_>) -> Result<()> {
+    hooks::on_file_permission(context)
+}
+
+/// Runs the LSM stack for a file mmap check.
+pub fn file_mmap(context: &FileMmapContext<'_>) -> Result<()> {
+    hooks::on_file_mmap(context)
+}
+
+/// Runs the LSM stack for a file receive check.
+pub fn file_receive(context: &FileReceiveContext<'_>) -> Result<()> {
+    hooks::on_file_receive(context)
+}
+
+/// Runs the LSM stack for a file lock check.
+pub fn file_lock(context: &FileLockContext<'_>) -> Result<()> {
+    hooks::on_file_lock(context)
+}
+
+/// Runs the LSM stack for a file metadata query check.
+pub fn file_getattr(context: &FileGetattrContext<'_>) -> Result<()> {
+    hooks::on_file_getattr(context)
 }

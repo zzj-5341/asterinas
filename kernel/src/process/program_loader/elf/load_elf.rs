@@ -19,6 +19,7 @@ use crate::{
         process_vm::{AuxKey, AuxVec},
         program_loader::check_executable_inode,
     },
+    security,
     util::random::getrandom,
     vm::{
         perms::VmPerms,
@@ -64,7 +65,7 @@ pub fn load_elf_to_vmar(
         expect(unused_mut)
     )]
     let (elf_mapped_info, entry_point, mut aux_vec) =
-        map_vmos_and_build_aux_vec(vmar, ldso, &elf_headers, &elf_file)?;
+        map_vmos_and_build_aux_vec(vmar, ldso, &elf_headers, &elf_file, path_resolver)?;
     vmar.process_vm()
         .set_code_range(elf_mapped_info.code_range.clone());
     vmar.process_vm()
@@ -144,6 +145,7 @@ fn map_vmos_and_build_aux_vec(
     ldso: Option<(Path, ElfHeaders)>,
     parsed_elf: &ElfHeaders,
     elf_file: &Path,
+    path_resolver: &PathResolver,
 ) -> Result<(ElfMappedInfo, Vaddr, AuxVec)> {
     let ldso_load_info = if let Some((ldso_file, ldso_elf)) = ldso {
         Some(load_ldso(vmar, &ldso_file, &ldso_elf)?)
@@ -160,20 +162,22 @@ fn map_vmos_and_build_aux_vec(
         init_aux_vec(parsed_elf, &elf_mapped_info.full_range, ldso_base)?
     };
 
-    // Set AT_SECURE based on setuid/setgid bits and `no_new_privs`.
+    // Set AT_SECURE based on effective setuid/setgid transitions and LSM policy.
     //
     // FIXME: We should fetch the setuid/setgid bits and `no_new_privs` from
     // the execve entry and pass them here, rather than re-fetching them here.
     let mode = elf_file.inode().mode()?;
-    let secure = if mode.has_set_uid() || mode.has_set_gid() {
+    let is_setid_secure = if mode.has_set_uid() || mode.has_set_gid() {
         let task = Task::current().unwrap();
         match task.as_posix_thread() {
-            Some(posix_thread) if !posix_thread.credentials().no_new_privs() => 1,
-            _ => 0,
+            Some(posix_thread) => !posix_thread.credentials().no_new_privs(),
+            None => false,
         }
     } else {
-        0
+        false
     };
+    let lsm_secure = security::bprm_secureexec(elf_file, path_resolver)?;
+    let secure = if is_setid_secure || lsm_secure { 1 } else { 0 };
     aux_vec.set(AuxKey::AT_SECURE, secure);
 
     let entry_point = if let Some(ldso_load_info) = ldso_load_info {
