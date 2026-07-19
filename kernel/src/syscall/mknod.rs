@@ -4,13 +4,14 @@ use super::SyscallReturn;
 use crate::{
     fs::{
         self,
-        file::{InodeMode, InodeType, file_table::RawFileDesc},
+        file::{InodeMode, InodeType, StatusFlags, file_table::RawFileDesc},
         vfs::{
             inode::MknodType,
             path::{AT_FDCWD, EmptyPathStr, FsPath},
         },
     },
     prelude::*,
+    security::{self, FileCreateKind},
     syscall::constants::MAX_FILENAME_LEN,
 };
 
@@ -33,15 +34,32 @@ pub fn sys_mknodat(
         dirfd, path_name, inode_mode, inode_type, dev
     );
 
+    let path_resolver = fs_ref.resolver().read();
     let (dir_path, name) = {
         let path_name = path_name.to_string_lossy();
         let fs_path = FsPath::from_fd_at(dirfd, &path_name, EmptyPathStr::Reject)?;
-        fs_ref
-            .resolver()
-            .read()
+        path_resolver
             .lookup_unresolved_no_follow(&fs_path)?
             .into_parent_and_filename()?
     };
+
+    super::check_parent_write_permission(&dir_path)?;
+
+    let create_kind = match inode_type {
+        InodeType::File => FileCreateKind::Regular,
+        InodeType::CharDevice | InodeType::BlockDevice => FileCreateKind::Device,
+        InodeType::NamedPipe => FileCreateKind::Fifo,
+        InodeType::Socket => FileCreateKind::Socket,
+        _ => return_errno_with_message!(Errno::EPERM, "unimplemented file types"),
+    };
+    security::file_create(
+        &dir_path,
+        Some(&name),
+        &path_resolver,
+        create_kind,
+        None,
+        StatusFlags::empty(),
+    )?;
 
     match inode_type {
         InodeType::File => {
