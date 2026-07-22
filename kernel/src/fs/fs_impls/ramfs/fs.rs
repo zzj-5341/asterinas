@@ -19,7 +19,7 @@ use super::{memfd::MemfdInode, xattr::RamXattr, *};
 use crate::{
     device::{self, DeviceType},
     fs::{
-        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, Permission, StatusFlags, mkmod},
+        file::{AccessMode, InodeMode, InodeType, PerOpenFileOps, StatusFlags, mkmod},
         pipe::Pipe,
         pseudofs::AnonDeviceId,
         tmpfs::{self, TMPFS_MAGIC},
@@ -894,24 +894,22 @@ impl Inode for RamInode {
             return_errno_with_message!(Errno::EEXIST, "entry exists");
         }
 
+        let (uid, gid) = current_fs_ids();
         let new_inode = match type_ {
             MknodType::CharDevice(dev_id) | MknodType::BlockDevice(dev_id) => {
                 let dev_type = type_.device_type().unwrap();
                 RamInode::new_device(
                     &self.fs.upgrade().unwrap(),
                     mode,
-                    Uid::new_root(),
-                    Gid::new_root(),
+                    uid,
+                    gid,
                     dev_type,
                     dev_id,
                 )
             }
-            MknodType::NamedPipe => RamInode::new_named_pipe(
-                &self.fs.upgrade().unwrap(),
-                mode,
-                Uid::new_root(),
-                Gid::new_root(),
-            ),
+            MknodType::NamedPipe => {
+                RamInode::new_named_pipe(&self.fs.upgrade().unwrap(), mode, uid, gid)
+            }
         };
 
         let mut self_dir = self_dir.upgrade();
@@ -944,13 +942,7 @@ impl Inode for RamInode {
         }
 
         let fs = self.fs.upgrade().unwrap();
-        let (uid, gid) = Thread::current()
-            .and_then(|thread| {
-                let posix_thread = thread.as_posix_thread()?;
-                let credentials = posix_thread.credentials();
-                Some((credentials.fsuid(), credentials.fsgid()))
-            })
-            .unwrap_or((Uid::new_root(), Gid::new_root()));
+        let (uid, gid) = current_fs_ids();
         let new_inode = match type_ {
             InodeType::File => RamInode::new_file(&fs, mode, uid, gid),
             InodeType::SymLink => RamInode::new_symlink(&fs, mode, uid, gid),
@@ -987,13 +979,8 @@ impl Inode for RamInode {
         }
 
         let fs = self.fs.upgrade().unwrap();
-        Ok(RamInode::new_tmpfile(
-            &fs,
-            mode,
-            Uid::new_root(),
-            Gid::new_root(),
-            hard_linkability,
-        ))
+        let (uid, gid) = current_fs_ids();
+        Ok(RamInode::new_tmpfile(&fs, mode, uid, gid, hard_linkability))
     }
 
     fn link(&self, old: &Arc<dyn Inode>, name: &str) -> Result<()> {
@@ -1349,14 +1336,12 @@ impl Inode for RamInode {
         flags: XattrSetFlags,
     ) -> Result<()> {
         RamXattr::check_file_type_for_xattr(self.typ)?;
-        self.check_permission(Permission::MAY_WRITE)?;
         self.xattr.set(name, value_reader, flags)
     }
 
     fn get_xattr(&self, name: XattrName, value_writer: &mut VmWriter) -> Result<usize> {
         RamXattr::check_file_type_for_xattr(self.typ)
             .map_err(|_| Error::with_message(Errno::ENODATA, "no available xattrs"))?;
-        self.check_permission(Permission::MAY_READ)?;
         self.xattr.get(name, value_writer)
     }
 
@@ -1364,15 +1349,11 @@ impl Inode for RamInode {
         if RamXattr::check_file_type_for_xattr(self.typ).is_err() {
             return Ok(0);
         }
-        if self.check_permission(Permission::MAY_ACCESS).is_err() {
-            return Ok(0);
-        }
         self.xattr.list(namespace, list_writer)
     }
 
     fn remove_xattr(&self, name: XattrName) -> Result<()> {
         RamXattr::check_file_type_for_xattr(self.typ)?;
-        self.check_permission(Permission::MAY_WRITE)?;
         self.xattr.remove(name)
     }
 }
@@ -1461,6 +1442,16 @@ fn write_lock_two_direntries_by_ino<'a>(
 
 fn now() -> Duration {
     RealTimeCoarseClock::get().read_time()
+}
+
+fn current_fs_ids() -> (Uid, Gid) {
+    Thread::current()
+        .and_then(|thread| {
+            let posix_thread = thread.as_posix_thread()?;
+            let credentials = posix_thread.credentials();
+            Some((credentials.fsuid(), credentials.fsgid()))
+        })
+        .unwrap_or((Uid::new_root(), Gid::new_root()))
 }
 
 pub(super) struct RamFsType;

@@ -13,7 +13,9 @@ use ostd::mm::Vaddr;
 
 pub use self::{
     handle::VmarHandle,
-    vmar_impls::{RssType, Vmar, map::VmarMapOffset, page_fault::PageFaultInfo},
+    vmar_impls::{
+        RssType, Vmar, map::VmarMapOffset, page_fault::PageFaultInfo, remap::RemapOldMappingAction,
+    },
 };
 
 pub const VMAR_LOWEST_ADDR: Vaddr = 0x001_0000; // 64 KiB is the Linux configurable default

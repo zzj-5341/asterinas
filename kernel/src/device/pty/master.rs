@@ -10,7 +10,10 @@ use crate::{
     events::IoEvents,
     fs::{
         devpts::Ptmx,
-        file::{AccessMode, OpenArgs, PerOpenFileOps, StatusFlags, file_table::FdFlags, mkmod},
+        file::{
+            AccessMode, OpenArgs, PerOpenFileOps, SettableStatusFlags, StatusFlags,
+            file_table::FdFlags, mkmod,
+        },
         vfs::{inode::FileOps, path::FsPath},
     },
     prelude::*,
@@ -152,8 +155,8 @@ impl PerOpenFileOps for PtyMaster {
         use crate::{device::tty::ioctl_defs::*, util::ioctl::common_defs::GetNumBytesToRead};
 
         dispatch_ioctl!(match raw_ioctl {
-            GetTermios | SetTermios | SetTermiosWait | SetTermiosFlush | GetWinSize
-            | SetWinSize | GetPtyNumber => {
+            GetTermios | GetTermios2 | SetTermios | SetTermios2 | SetTermiosWait
+            | SetTermiosFlush | GetWinSize | SetWinSize | GetPtyNumber => {
                 return self.slave.ioctl(raw_ioctl);
             }
 
@@ -241,6 +244,10 @@ impl PerOpenFileOps for PtyMaster {
         });
 
         Ok(0)
+    }
+
+    fn settable_status_flags(&self) -> SettableStatusFlags {
+        SettableStatusFlags::minimal().with_o_async()
     }
 }
 

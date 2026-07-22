@@ -11,7 +11,7 @@ use crate::{
     events::IoEvents,
     net::{
         iface::{BoundTcpPort, Iface, RawTcpSocketExt, TcpConnection},
-        socket::util::{LingerOption, SendRecvFlags, SockShutdownCmd},
+        socket::util::{LingerOption, RecvFlags, SendFlags, SockShutdownCmd},
     },
     prelude::*,
     process::signal::{Pollee, Poller},
@@ -72,12 +72,23 @@ impl ConnectedStream {
     pub(super) fn try_recv(
         &self,
         writer: &mut dyn MultiWrite,
-        flags: SendRecvFlags,
+        flags: RecvFlags,
     ) -> Result<(usize, NeedIfacePoll)> {
+        let mut trunc_len = if flags.contains(RecvFlags::MSG_TRUNC) {
+            Some(writer.sum_lens())
+        } else {
+            None
+        };
         let result = self
             .tcp_conn
             .recv(flags.receive_behavior(), |socket_buffer| {
-                writer.write(&mut VmReader::from(socket_buffer))
+                if let Some(remaining) = trunc_len.as_mut() {
+                    let recv_len = socket_buffer.len().min(*remaining);
+                    *remaining -= recv_len;
+                    Ok(recv_len)
+                } else {
+                    writer.write(&mut VmReader::from(socket_buffer))
+                }
             });
 
         match result {
@@ -100,7 +111,7 @@ impl ConnectedStream {
     pub(super) fn try_send(
         &self,
         reader: &mut dyn MultiRead,
-        _flags: SendRecvFlags,
+        _flags: SendFlags,
     ) -> Result<(usize, NeedIfacePoll)> {
         let result = self
             .tcp_conn

@@ -14,7 +14,7 @@ use crate::{
         unix::{
             UnixSocketAddr, addr::UnixSocketAddrBound, cred::SocketCred, ctrl_msg::AuxiliaryData,
         },
-        util::{ControlMessage, SendRecvFlags, SockShutdownCmd},
+        util::{ControlMessage, RecvFlags, RecvOutput, SockShutdownCmd},
     },
     prelude::*,
     process::signal::Pollee,
@@ -117,14 +117,14 @@ impl Connected {
         &self,
         writer: &mut dyn MultiWrite,
         is_seqpacket: bool,
-        flags: SendRecvFlags,
-    ) -> Result<(usize, Vec<ControlMessage>)> {
+        flags: RecvFlags,
+    ) -> Result<(RecvOutput, Vec<ControlMessage>)> {
         let is_empty = writer.is_empty();
         if is_empty && !is_seqpacket {
             if self.inner.this_end().reader.lock().is_empty() {
                 return_errno_with_message!(Errno::EAGAIN, "the channel is empty");
             }
-            return Ok((0, Vec::new()));
+            return Ok((RecvOutput::new_for_stream(0), Vec::new()));
         }
 
         let this_end = self.inner.this_end();
@@ -157,7 +157,7 @@ impl Connected {
             } else {
                 Vec::new()
             };
-            return Ok((read_len, ctrl_msgs));
+            return Ok((RecvOutput::new_for_stream(read_len), ctrl_msgs));
         }
 
         let mut all_aux = peer_end.all_aux.lock();
@@ -253,7 +253,7 @@ impl Connected {
             let ctrl_msgs = aux_data.data.generate_control(behavior, is_pass_cred);
             if behavior.will_consume_data() {
                 let remaining_aux_count = all_aux.len() - (aux_pos - 1);
-                all_aux.truncate_front(remaining_aux_count);
+                all_aux.retain_back(remaining_aux_count);
                 let consume_len = read_tot_len + trunc_len;
                 if (all_aux.front().unwrap().end - read_base).0 <= consume_len {
                     all_aux.pop_front();
@@ -271,7 +271,14 @@ impl Connected {
         };
 
         debug_assert!(is_seqpacket || read_tot_len != 0);
-        Ok((read_tot_len, ctrl_msgs))
+        let output = if is_seqpacket {
+            let message_len = read_tot_len + trunc_len;
+            RecvOutput::new_for_packet(flags, read_tot_len, message_len)
+        } else {
+            RecvOutput::new_for_stream(read_tot_len)
+        };
+
+        Ok((output, ctrl_msgs))
     }
 
     pub(super) fn try_write(

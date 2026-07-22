@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 pub(super) use bound::BoundNetlink;
 use unbound::UnboundNetlink;
 
 use super::{GroupIdSet, NetlinkSocketAddr};
 use crate::{
     events::IoEvents,
-    fs::{pseudofs::SockFs, vfs::path::Path},
+    fs::{
+        file::{FileCommon, StatusFlags},
+        pseudofs::SockFs,
+    },
     net::socket::{
         Socket,
         netlink::{AddMembership, DropMembership, table::SupportedNetlinkProtocol},
@@ -18,9 +19,11 @@ use crate::{
         },
         private::SocketPrivate,
         util::{
-            MessageHeader, SendRecvFlags, SocketAddr,
+            MessageHeader, RecvFlags, RecvOutput, SendFlags, SocketAddr,
             datagram_common::{Bound, Inner, select_remote_and_bind},
-            options::{GetSocketLevelOption, SetSocketLevelOption, SocketOptionSet},
+            options::{
+                GetSocketLevelOption, SetSocketLevelOption, SocketOptionSet, SocketTimeouts,
+            },
         },
     },
     prelude::*,
@@ -35,10 +38,10 @@ pub struct NetlinkSocket<P: SupportedNetlinkProtocol> {
     inner: RwMutex<Inner<UnboundNetlink<P>, BoundNetlink<P::Message>>>,
     options: RwLock<OptionSet>,
     socket_type: SockType,
+    timeouts: SocketTimeouts,
 
-    is_nonblocking: AtomicBool,
     pollee: Pollee,
-    pseudo_path: Path,
+    common: FileCommon,
 }
 
 #[derive(Clone, Debug)]
@@ -62,13 +65,18 @@ where
         debug_assert!(socket_type == SockType::SOCK_RAW || socket_type == SockType::SOCK_DGRAM);
 
         let unbound = UnboundNetlink::new();
+        let status_flags = if is_nonblocking {
+            StatusFlags::O_NONBLOCK
+        } else {
+            StatusFlags::empty()
+        };
         Arc::new(Self {
             inner: RwMutex::new(Inner::Unbound(unbound)),
             options: RwLock::new(OptionSet::new()),
             socket_type,
-            is_nonblocking: AtomicBool::new(is_nonblocking),
+            timeouts: SocketTimeouts::new(),
             pollee: Pollee::new(),
-            pseudo_path: SockFs::new_path(),
+            common: FileCommon::new(SockFs::new_path(), status_flags),
         })
     }
 
@@ -76,7 +84,7 @@ where
         &self,
         reader: &mut dyn MultiRead,
         remote: Option<&NetlinkSocketAddr>,
-        flags: SendRecvFlags,
+        flags: SendFlags,
     ) -> Result<usize> {
         let sent_bytes = select_remote_and_bind(
             &self.inner,
@@ -97,16 +105,16 @@ where
     pub(super) fn try_recv(
         &self,
         writer: &mut dyn MultiWrite,
-        flags: SendRecvFlags,
-    ) -> Result<(usize, SocketAddr)> {
-        let recv_bytes = self
+        flags: RecvFlags,
+    ) -> Result<(RecvOutput, SocketAddr)> {
+        let result = self
             .inner
             .read()
             .try_recv(writer, flags)
-            .map(|(recv_bytes, remote_endpoint)| (recv_bytes, remote_endpoint.into()))?;
+            .map(|(output, remote_endpoint)| (output, remote_endpoint.into()))?;
         self.pollee.invalidate();
 
-        Ok(recv_bytes)
+        Ok(result)
     }
 }
 
@@ -150,7 +158,7 @@ where
         &self,
         reader: &mut dyn MultiRead,
         message_header: MessageHeader,
-        flags: SendRecvFlags,
+        flags: SendFlags,
     ) -> Result<usize> {
         let MessageHeader {
             addr,
@@ -179,15 +187,17 @@ where
     fn recvmsg(
         &self,
         writer: &mut dyn MultiWrite,
-        flags: SendRecvFlags,
-    ) -> Result<(usize, MessageHeader)> {
-        let (received_len, addr) = self.block_on(IoEvents::IN, || self.try_recv(writer, flags))?;
+        flags: RecvFlags,
+    ) -> Result<(RecvOutput, MessageHeader)> {
+        let (output, addr) = self.block_on(IoEvents::IN, self.timeouts.recv_timeout(), || {
+            self.try_recv(writer, flags)
+        })?;
 
         // TODO: Receive control message
 
         let message_header = MessageHeader::new(Some(addr), Vec::new());
 
-        Ok((received_len, message_header))
+        Ok((output, message_header))
     }
 
     fn get_option(&self, option: &mut dyn SocketOption) -> Result<()> {
@@ -206,7 +216,7 @@ where
         // Deal with socket-level options
         options
             .socket
-            .get_option(option, &(&*inner, self.socket_type))
+            .get_option(option, &(&*inner, self.socket_type, &self.timeouts))
 
         // TODO: Deal with netlink-level options
     }
@@ -216,7 +226,10 @@ where
 
         // Deal with socket-level options
         let mut options = self.options.write();
-        match options.socket.set_option(option, &*inner) {
+        match options
+            .socket
+            .set_option(option, &(&*inner, &self.timeouts))
+        {
             Err(err) if err.error() == Errno::ENOPROTOOPT => (),
             res => return res.map(|_need_iface_poll| ()),
         }
@@ -227,8 +240,8 @@ where
         do_netlink_setsockopt(option, &mut inner)
     }
 
-    fn pseudo_path(&self) -> &Path {
-        &self.pseudo_path
+    fn common(&self) -> &FileCommon {
+        &self.common
     }
 }
 
@@ -237,11 +250,7 @@ where
     BoundNetlink<P::Message>: Bound<Endpoint = NetlinkSocketAddr>,
 {
     fn is_nonblocking(&self) -> bool {
-        self.is_nonblocking.load(Ordering::Relaxed)
-    }
-
-    fn set_nonblocking(&self, nonblocking: bool) {
-        self.is_nonblocking.store(nonblocking, Ordering::Relaxed);
+        self.common.is_nonblocking()
     }
 }
 
@@ -259,6 +268,7 @@ impl<P: SupportedNetlinkProtocol> GetSocketLevelOption
     for (
         &Inner<UnboundNetlink<P>, BoundNetlink<P::Message>>,
         SockType,
+        &SocketTimeouts,
     )
 {
     fn socket_type(&self) -> SockType {
@@ -268,11 +278,21 @@ impl<P: SupportedNetlinkProtocol> GetSocketLevelOption
     fn is_listening(&self) -> bool {
         false
     }
+
+    fn socket_timeouts(&self) -> Option<&SocketTimeouts> {
+        Some(self.2)
+    }
 }
 
 impl<P: SupportedNetlinkProtocol> SetSocketLevelOption
-    for Inner<UnboundNetlink<P>, BoundNetlink<P::Message>>
+    for (
+        &Inner<UnboundNetlink<P>, BoundNetlink<P::Message>>,
+        &SocketTimeouts,
+    )
 {
+    fn socket_timeouts(&self) -> Option<&SocketTimeouts> {
+        Some(self.1)
+    }
 }
 
 impl<P: SupportedNetlinkProtocol> Inner<UnboundNetlink<P>, BoundNetlink<P::Message>> {

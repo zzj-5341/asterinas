@@ -36,6 +36,8 @@ mkdir04
 mknod01
 mknod02
 mknod06
+mknod08
+mmap09
 open07
 open15
 pipeio_1

@@ -10,7 +10,7 @@ use ostd::sync::WaitQueue;
 use crate::{
     events::IoEvents,
     fs::{
-        file::{AccessMode, PerOpenFileOps, StatusFlags},
+        file::{AccessMode, PerOpenFileOps, SettableStatusFlags, StatusFlags},
         utils::{Endpoint, EndpointState},
         vfs::inode::FileOps,
     },
@@ -157,6 +157,11 @@ impl PerOpenFileOps for PipeHandle {
             }
             _ => return_errno_with_message!(Errno::ENOTTY, "the ioctl command is unknown"),
         })
+    }
+
+    fn settable_status_flags(&self) -> SettableStatusFlags {
+        // TODO: Support "packet" mode for pipes then `O_DIRECT` can be supported.
+        SettableStatusFlags::minimal().with_o_async()
     }
 }
 
@@ -517,7 +522,10 @@ mod test {
     use ostd::prelude::*;
 
     use super::*;
-    use crate::thread::{Thread, kernel_thread::ThreadOptions};
+    use crate::{
+        prelude::Result,
+        thread::{Thread, kernel_thread::ThreadOptions},
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Ordering {
@@ -649,7 +657,7 @@ mod test {
         );
     }
 
-    fn read(reader: &dyn PerOpenFileOps, buf: &mut [u8]) -> crate::prelude::Result<usize> {
+    fn read(reader: &dyn PerOpenFileOps, buf: &mut [u8]) -> Result<usize> {
         reader.read_at(
             0,
             &mut VmWriter::from(buf).to_fallible(),
@@ -657,7 +665,7 @@ mod test {
         )
     }
 
-    fn write(writer: &dyn PerOpenFileOps, buf: &[u8]) -> crate::prelude::Result<usize> {
+    fn write(writer: &dyn PerOpenFileOps, buf: &[u8]) -> Result<usize> {
         writer.write_at(
             0,
             &mut VmReader::from(buf).to_fallible(),

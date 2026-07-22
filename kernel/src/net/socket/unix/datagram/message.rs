@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use ostd::sync::WaitQueue;
 use spin::Once;
@@ -13,7 +16,7 @@ use crate::{
             addr::{UnixSocketAddrBound, UnixSocketAddrKey},
             ctrl_msg::AuxiliaryData,
         },
-        util::{ControlMessage, SendRecvFlags},
+        util::{ControlMessage, RecvFlags, RecvOutput},
     },
     prelude::*,
     process::signal::Pollee,
@@ -102,14 +105,22 @@ impl MessageQueue {
     }
 
     /// Blocks until the buffer is free and the `try_send` succeeds, or until interrupted.
-    pub(super) fn block_send<F, R>(&self, mut try_send: F) -> Result<R>
+    pub(super) fn block_send<F, R>(&self, timeout: Option<Duration>, mut try_send: F) -> Result<R>
     where
         F: FnMut() -> Result<R>,
     {
-        self.send_wait_queue.pause_until(|| match try_send() {
-            Err(err) if err.error() == Errno::EAGAIN => None,
-            result => Some(result),
-        })?
+        self.send_wait_queue
+            .pause_until_or_timeout(
+                || match try_send() {
+                    Err(err) if err.error() == Errno::EAGAIN => None,
+                    result => Some(result),
+                },
+                timeout.as_ref(),
+            )
+            .map_err(|err| match err.error() {
+                Errno::ETIME => Error::with_message(Errno::EAGAIN, "the socket timeout expired"),
+                _ => err,
+            })?
     }
 }
 
@@ -163,8 +174,8 @@ impl MessageReceiver {
     pub(super) fn try_recv(
         &self,
         writer: &mut dyn MultiWrite,
-        flags: SendRecvFlags,
-    ) -> Result<(usize, Vec<ControlMessage>, UnixSocketAddr)> {
+        flags: RecvFlags,
+    ) -> Result<(RecvOutput, Vec<ControlMessage>, UnixSocketAddr)> {
         let mut inner = self.queue.inner.lock();
         let inner = inner.as_mut().unwrap();
 
@@ -172,14 +183,16 @@ impl MessageReceiver {
             if !inner.is_shutdown {
                 return_errno_with_message!(Errno::EAGAIN, "the receive buffer is empty");
             } else {
-                return Ok((0, Vec::new(), UnixSocketAddr::Unnamed));
+                return Ok((
+                    RecvOutput::new_for_packet(flags, 0, 0),
+                    Vec::new(),
+                    UnixSocketAddr::Unnamed,
+                ));
             }
         };
 
+        let message_len = msg.bytes.len();
         let len = writer.write(&mut VmReader::from(msg.bytes.as_slice()))?;
-        if len != msg.bytes.len() {
-            warn!("setting MSG_TRUNC is not supported");
-        }
 
         let is_pass_cred = self.queue.is_pass_cred.load(Ordering::Relaxed);
         let src = msg.src.clone();
@@ -200,7 +213,8 @@ impl MessageReceiver {
             message.aux.generate_control(behavior, is_pass_cred)
         };
 
-        Ok((len, ctrl_msgs, src))
+        let output = RecvOutput::new_for_packet(flags, len, message_len);
+        Ok((output, ctrl_msgs, src))
     }
 
     pub(super) fn shutdown(&self) {

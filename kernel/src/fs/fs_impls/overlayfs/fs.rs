@@ -580,6 +580,7 @@ impl OverlayInode {
     pub fn set_owner(&self, uid: Uid) -> Result<()>;
     pub fn set_group(&self, gid: Gid) -> Result<()>;
     pub fn fallocate(&self, mode: FallocMode, offset: usize, len: usize) -> Result<()>;
+    pub fn remove_xattr(&self, name: XattrName) -> Result<()>;
 }
 
 #[inherit_methods(from = "self.build_upper_recursively_if_needed().unwrap()")]
@@ -1188,7 +1189,6 @@ impl FsType for OverlayFsType {
         let mut work = "";
 
         let args = fs_creation_ctx.args().ok_or(Error::new(Errno::EINVAL))?;
-        let args = args.to_string_lossy();
         let entries = args.split(',');
 
         for entry in entries {

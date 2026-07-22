@@ -262,6 +262,22 @@ impl Mount {
         Self::new(fs, PerMountFlags::KERNMOUNT, None, Weak::new(), None)
     }
 
+    /// Creates a mount node that is not attached to the mount tree.
+    //
+    // FIXME: Linux creates detached mounts in an anonymous mount namespace
+    // and moves them into the target namespace when they are attached. Asterinas
+    // currently records the caller's namespace here because `Mount::mnt_ns` is
+    // immutable. This should be changed once mount namespaces can be updated
+    // during attach.
+    pub fn new_detached(
+        fs: Arc<dyn FileSystem>,
+        flags: PerMountFlags,
+        mnt_ns: Weak<MountNamespace>,
+        source: Option<String>,
+    ) -> Result<Arc<Self>> {
+        Self::new(fs, flags, None, mnt_ns, source)
+    }
+
     /// The internal constructor.
     ///
     /// A root mount node has no mountpoint, while other mount nodes must have one.
@@ -316,7 +332,7 @@ impl Mount {
     ///
     /// If the source is provided by user, it will be recorded in the new mount.
     ///
-    /// Return the mounted child mount.
+    /// Returns the mounted child mount.
     pub(super) fn do_mount(
         self: &Arc<Self>,
         fs: Arc<dyn FileSystem>,
@@ -558,7 +574,7 @@ impl Mount {
         &self,
         mount_flags: PerMountFlags,
         fs_flags: Option<FsFlags>,
-        data: Option<CString>,
+        data: Option<&str>,
         ctx: &Context,
         _topology: &mut MountTopology,
     ) -> Result<()> {
@@ -658,12 +674,8 @@ impl Mount {
                 .children
                 .read()
                 .get(&mount_point.key())
-                .cloned();
-            if let Some(child_mount) = child_mount {
-                target_mount = child_mount;
-            } else {
-                return None;
-            }
+                .cloned()?;
+            target_mount = child_mount;
         }
 
         Some(target_mount)

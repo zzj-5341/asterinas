@@ -10,7 +10,7 @@ use crate::{
             message::{ContinueRead, ProtocolSegment},
             route::kernel::get_netlink_route_kernel,
         },
-        util::{SendRecvFlags, datagram_common},
+        util::{RecvFlags, RecvOutput, SendFlags, datagram_common},
     },
     prelude::*,
     util::{MultiRead, MultiWrite},
@@ -41,7 +41,7 @@ impl datagram_common::Bound for BoundNetlinkRoute {
         &self,
         reader: &mut dyn MultiRead,
         remote: &Self::Endpoint,
-        flags: SendRecvFlags,
+        flags: SendFlags,
     ) -> Result<usize> {
         // TODO: Deal with flags
         if !flags.is_all_supported() {
@@ -98,8 +98,8 @@ impl datagram_common::Bound for BoundNetlinkRoute {
     fn try_recv(
         &self,
         writer: &mut dyn MultiWrite,
-        flags: SendRecvFlags,
-    ) -> Result<(usize, NetlinkSocketAddr)> {
+        flags: RecvFlags,
+    ) -> Result<(RecvOutput, NetlinkSocketAddr)> {
         // TODO: Deal with other flags.
         if !flags.is_all_supported() {
             warn!("unsupported flags: {:?}", flags);
@@ -108,14 +108,15 @@ impl datagram_common::Bound for BoundNetlinkRoute {
         let mut receive_queue = self.receive_queue.lock();
 
         receive_queue.dequeue_if(|response, response_len| {
-            let len = response_len.min(writer.sum_lens());
+            let copied_len = response_len.min(writer.sum_lens());
             response.write_to(writer)?;
 
             // TODO: The message can only come from kernel socket currently.
             let remote = NetlinkSocketAddr::new_unspecified();
 
             let should_dequeue = flags.receive_behavior().will_consume_data();
-            Ok((should_dequeue, (len, remote)))
+            let output = RecvOutput::new_for_packet(flags, copied_len, response_len);
+            Ok((should_dequeue, (output, remote)))
         })
     }
 

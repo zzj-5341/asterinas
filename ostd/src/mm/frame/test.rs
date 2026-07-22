@@ -372,7 +372,7 @@ mod segment {
     }
 
     #[ktest]
-    #[should_panic]
+    #[should_panic(expected = "segment virtual address out-of-bound for splitting")]
     fn invalid_segment_split() {
         let total_frames = 2;
         let segment = FrameAllocOptions::new()
@@ -380,6 +380,18 @@ mod segment {
             .expect("Failed to allocate segment");
         // Attempts to split at zero, which should panic
         segment.split(0);
+    }
+
+    #[ktest]
+    #[should_panic(expected = "segment virtual address out-of-bound for slicing")]
+    fn segment_slice_out_of_bounds() {
+        let total_frames = 3;
+        let segment = FrameAllocOptions::new()
+            .alloc_segment(total_frames)
+            .expect("Failed to allocate segment");
+        let huge_page_aligned_offset = usize::MAX - (PAGE_SIZE - 1);
+        // Huge out-of-bounds offsets should panic
+        segment.slice(&(huge_page_aligned_offset..huge_page_aligned_offset));
     }
 
     #[ktest]

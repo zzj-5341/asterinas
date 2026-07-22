@@ -33,6 +33,9 @@ use super::{
     fcntl::sys_fcntl,
     flock::sys_flock,
     fork::{sys_fork, sys_vfork},
+    fsconfig::sys_fsconfig,
+    fsmount::sys_fsmount,
+    fsopen::sys_fsopen,
     fsync::{sys_fdatasync, sys_fsync},
     futex::sys_futex,
     get_ioprio::sys_ioprio_get,
@@ -74,6 +77,7 @@ use super::{
     mknod::{sys_mknod, sys_mknodat},
     mmap::sys_mmap,
     mount::sys_mount,
+    move_mount::sys_move_mount,
     mprotect::sys_mprotect,
     mremap::sys_mremap,
     msync::sys_msync,
@@ -414,6 +418,10 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_PWRITEV2 = 328         => sys_pwritev2(args[..6]);
     SYS_STATX = 332            => sys_statx(args[..5]);
     SYS_PIDFD_SEND_SIGNAL = 424 => sys_pidfd_send_signal(args[..4]);
+    SYS_MOVE_MOUNT = 429        => sys_move_mount(args[..5]);
+    SYS_FSOPEN = 430           => sys_fsopen(args[..2]);
+    SYS_FSCONFIG = 431         => sys_fsconfig(args[..5]);
+    SYS_FSMOUNT = 432          => sys_fsmount(args[..3]);
     SYS_PIDFD_OPEN = 434       => sys_pidfd_open(args[..2]);
     SYS_CLONE3 = 435           => sys_clone3(args[..2], &user_ctx);
     SYS_CLOSE_RANGE = 436      => sys_close_range(args[..3]);

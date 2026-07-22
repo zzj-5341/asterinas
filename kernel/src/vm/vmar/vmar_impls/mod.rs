@@ -6,7 +6,7 @@ pub(super) mod map;
 pub(super) mod page_fault;
 mod protect;
 mod query;
-mod remap;
+pub(super) mod remap;
 mod unmap;
 
 use core::{
@@ -31,6 +31,10 @@ use crate::{
     process::{INIT_STACK_SIZE, Process, ProcessVm, ResourceType},
     vm::vmar::is_userspace_vaddr_range,
 };
+
+/// The upper bound for allocations under the `MAP_32BIT` mmap flag.
+#[cfg(target_arch = "x86_64")]
+const MAP_32BIT_HIGH_LIMIT: Vaddr = 0x8000_0000;
 
 /// The VMAR (used to be Virtual Memory Address Region, but now an orphan
 /// initialism).
@@ -351,7 +355,29 @@ impl VmarInner {
         // exist in `ResourceLimits`.
         let high_limit = VMAR_CAP_ADDR - INIT_STACK_SIZE - PAGE_SIZE * 2048;
         let low_limit = VMAR_LOWEST_ADDR;
+        self.alloc_free_region_in_range(size, align, low_limit, high_limit)
+    }
 
+    /// Allocates a free region for mapping that resides below 2 GiB.
+    ///
+    /// This is specifically used for supporting the `MAP_32BIT` mmap flag.
+    #[cfg(target_arch = "x86_64")]
+    fn alloc_free_region_below_2gib(&mut self, size: usize, align: usize) -> Result<Range<Vaddr>> {
+        let high_limit = MAP_32BIT_HIGH_LIMIT.min(VMAR_CAP_ADDR);
+        let low_limit = VMAR_LOWEST_ADDR;
+        self.alloc_free_region_in_range(size, align, low_limit, high_limit)
+    }
+
+    /// Core logic for `alloc_free_region` and `alloc_free_region_below_2gib`.
+    ///
+    /// Searches for a free region in `[low_limit, high_limit)`, from high to low.
+    fn alloc_free_region_in_range(
+        &mut self,
+        size: usize,
+        align: usize,
+        low_limit: Vaddr,
+        high_limit: Vaddr,
+    ) -> Result<Range<Vaddr>> {
         fn try_alloc_in_hole(
             hole_start: Vaddr,
             hole_end: Vaddr,
