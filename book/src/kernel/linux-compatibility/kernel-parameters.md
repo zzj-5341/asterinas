@@ -35,6 +35,44 @@ console=ttyS0
 console=ttyS0 console=hvc0
 ```
 
+### `lsm`
+
+Select the ordered list of optional Linux Security Modules enabled at boot.
+The capability module is always enabled and does not need to be listed.
+
+Supported optional modules:
+- `yama`
+- `apparmor`
+
+Example:
+```text
+lsm=yama,apparmor
+```
+
+Notes:
+- Module names are comma-separated and processed from left to right.
+- Unknown module names and duplicate entries are ignored with a warning.
+- When `lsm` is specified, it takes precedence over `security`.
+- If neither `lsm` nor `security` is specified, Yama is enabled by default.
+
+### `security`
+
+Select one legacy major Linux Security Module
+while preserving the default optional module stack.
+Asterinas currently accepts `apparmor` as the legacy major module.
+
+Example:
+```text
+security=apparmor
+```
+
+Notes:
+- The capability module remains enabled.
+- Yama remains enabled as the default optional module.
+- This parameter is ignored when `lsm` is also specified.
+
+The current AppArmor prototype mediates only the `open` system call.
+
 ### `virtio_mmio.device`
 
 Register a VirtIO-MMIO device from the kernel command line.
