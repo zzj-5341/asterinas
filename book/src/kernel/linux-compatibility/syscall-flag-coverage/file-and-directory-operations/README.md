@@ -32,6 +32,9 @@ Partially-supported flags:
 Supported and unsupported functionality of `openat` are the same as `open`.
 The SCML rules are omitted for brevity.
 
+When AppArmor is selected,
+these system calls are subject to its [regular-file open policy](../../../security/apparmor-file-open.md).
+
 For more information,
 see [the man page](https://man7.org/linux/man-pages/man2/openat.2.html).
 
