@@ -124,22 +124,21 @@ static void load_profile(void)
 	int fd;
 	ssize_t len;
 
-	policy_len =
-		CHECK_WITH(snprintf(policy, sizeof(policy),
-				    "profile %s\n"
-				    "%s r\n"
-				    "%s w\n"
-				    "%s rw\n"
-				    "%s r\n"
-				    "%s rw\n"
-				    "%s w\n"
-				    "%s r\n",
-				    PROFILE_NAME, READ_ONLY_PATH,
-				    WRITE_ONLY_PATH, CREATE_ALLOWED_PATH,
-				    CREATE_READ_ONLY_PATH,
-				    OPENAT_CREATE_ALLOWED_PATH,
-				    CREAT_ALLOWED_PATH, current_attr_path),
-			   _ret >= 0 && _ret < (int)sizeof(policy));
+	policy_len = CHECK_WITH(snprintf(policy, sizeof(policy),
+					 "profile %s\n"
+					 "%s r\n"
+					 "%s w\n"
+					 "%s rw\n"
+					 "%s r\n"
+					 "%s rw\n"
+					 "%s w\n"
+					 "%s r\n",
+					 PROFILE_NAME, READ_ONLY_PATH,
+					 WRITE_ONLY_PATH, CREATE_ALLOWED_PATH,
+					 CREATE_READ_ONLY_PATH,
+					 OPENAT_CREATE_ALLOWED_PATH,
+					 CREAT_ALLOWED_PATH, current_attr_path),
+				_ret >= 0 && _ret < (int)sizeof(policy));
 
 	fd = CHECK(open(APPARMOR_LOAD_PATH, O_WRONLY));
 	CHECK_WITH(write(fd, policy, (size_t)policy_len), _ret == policy_len);
@@ -386,22 +385,19 @@ FN_TEST(profile_controls_openat_access)
 
 	SKIP_TEST_IF(!openat_syscall_supported());
 
-	fd = TEST_SUCC(
-		invoke_openat_syscall(READ_ONLY_PATH, O_RDONLY, 0));
+	fd = TEST_SUCC(invoke_openat_syscall(READ_ONLY_PATH, O_RDONLY, 0));
 	if (fd >= 0) {
 		TEST_SUCC(close(fd));
 	}
-	TEST_ERRNO(invoke_openat_syscall(READ_ONLY_PATH, O_WRONLY, 0),
-		   EACCES);
-	TEST_ERRNO(invoke_openat_syscall(READ_ONLY_PATH,
-					 O_RDONLY | O_TRUNC, 0),
+	TEST_ERRNO(invoke_openat_syscall(READ_ONLY_PATH, O_WRONLY, 0), EACCES);
+	TEST_ERRNO(invoke_openat_syscall(READ_ONLY_PATH, O_RDONLY | O_TRUNC, 0),
 		   EACCES);
 	TEST_RES(stat(READ_ONLY_PATH, &statbuf),
 		 _ret == 0 &&
 			 statbuf.st_size == (off_t)(sizeof(FILE_CONTENT) - 1));
 
 	fd = TEST_SUCC(invoke_openat_syscall(OPENAT_CREATE_ALLOWED_PATH,
-					    O_RDWR | O_CREAT, 0600));
+					     O_RDWR | O_CREAT, 0600));
 	if (fd >= 0) {
 		TEST_SUCC(close(fd));
 	}

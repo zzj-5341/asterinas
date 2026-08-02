@@ -154,6 +154,10 @@ fn do_open_tmpfile(
         path_resolver.lookup_no_follow(fs_path)?
     };
 
+    if !dir_path.inode().type_().is_directory() {
+        return_errno_with_message!(Errno::ENOTDIR, "O_TMPFILE path is not a directory");
+    }
+
     // `O_EXCL` with `O_TMPFILE` is allowed by Linux, but it prevents the tmpfile
     // from being linked later by `linkat(..., AT_EMPTY_PATH)`.
     // Reference: <https://man7.org/linux/man-pages/man2/open.2.html>.
