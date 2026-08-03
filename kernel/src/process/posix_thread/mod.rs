@@ -23,6 +23,7 @@ use crate::{
         posix_thread::ptrace::TraceeStatus,
         signal::{PauseReason, PollHandle, sig_mask::SigMask},
     },
+    security::lsm::TaskSecurity,
     thread::{Thread, Tid},
     time::{Timer, TimerManager, clocks::ProfClock, timer::TimerGuard},
 };
@@ -60,6 +61,9 @@ pub struct PosixThread {
 
     /// Process credentials. At the kernel level, credentials are a per-thread attribute.
     credentials: Credentials,
+
+    /// Linux Security Module state.
+    security: TaskSecurity,
 
     /// The file system information of the thread.
     fs: RwMutex<Arc<ThreadFsInfo>>,
@@ -306,6 +310,11 @@ impl PosixThread {
     /// Gets the duplicatable read-only credentials of the thread.
     pub fn credentials_dup(&self) -> Credentials<ReadDupOp> {
         self.credentials.dup().restrict()
+    }
+
+    /// Returns this task's Linux Security Module state.
+    pub fn security(&self) -> &TaskSecurity {
+        &self.security
     }
 
     /// Returns the I/O priority value of the thread.

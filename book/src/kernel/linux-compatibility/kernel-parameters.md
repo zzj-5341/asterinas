@@ -35,6 +35,70 @@ console=ttyS0
 console=ttyS0 console=hvc0
 ```
 
+### `lsm`
+
+Select the ordered list of optional Linux Security Modules enabled at boot.
+The capability module is always enabled and does not need to be listed.
+
+Supported optional modules:
+- `yama`
+- `apparmor`
+
+Example:
+```text
+lsm=yama,apparmor
+```
+
+Notes:
+- Module names are comma-separated and processed from left to right.
+- Unknown module names and duplicate entries are ignored with a warning.
+- When `lsm` is specified, it takes precedence over `security`.
+- If neither `lsm` nor `security` is specified, Yama is enabled by default.
+
+### `security`
+
+Select one legacy major Linux Security Module
+while preserving the default optional module stack.
+Asterinas currently accepts `apparmor` as the legacy major module.
+
+Example:
+```text
+security=apparmor
+```
+
+Notes:
+- The capability module remains enabled.
+- Yama remains enabled as the default optional module.
+- This parameter is ignored when `lsm` is also specified.
+
+#### AppArmor prototype scope
+
+The current AppArmor implementation is a minimal, functional skeleton. It
+provides exact-path, open-time file access mediation as a foundation for future
+AppArmor development, but it is not yet a complete security boundary.
+
+The prototype currently:
+
+- loads text profiles through `/sys/kernel/security/apparmor/.load`;
+- exposes loaded profiles through `/sys/kernel/security/apparmor/profiles`;
+- attaches a profile through `/proc/self/attr/current` and inherits the label
+  across clone and fork;
+- mediates exact canonical absolute paths with read (`r`) and write (`w`)
+  permissions for `open`, `openat`, and `creat`, including file creation and
+  truncation; and
+- denies unlisted paths by default. `O_PATH` is intentionally not mediated,
+  while `O_TMPFILE` is denied for confined tasks because it has no reachable
+  pathname.
+
+Policy loading currently requires the complete profile to be submitted in one
+write of at most 4096 bytes. Streaming or multi-write policy loading is not
+supported. Path reconstruction is also not hardened against concurrent rename
+or mount-topology changes.
+
+Execution, delete, rename, link, mount, access through existing file
+descriptors, memory mapping, profile transitions, complain mode, auditing,
+namespaces, and the complete Linux AppArmor userspace ABI remain out of scope.
+
 ### `virtio_mmio.device`
 
 Register a VirtIO-MMIO device from the kernel command line.

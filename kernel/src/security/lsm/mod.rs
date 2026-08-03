@@ -7,18 +7,23 @@
 //! inspect common hook contexts before allowing or rejecting an operation.
 //!
 //! This module defines the common LSM traits and hook contexts shared by
-//! built-in modules such as `capability` and `yama`. Module selection follows
+//! built-in modules such as `capability`, `yama`, and `apparmor`. Module selection follows
 //! the `lsm=` and legacy `security=` kernel command-line parameters.
+
+use aster_systree::SysObj;
 
 pub mod hooks;
 mod modules;
+mod securityfs;
+mod task;
 
 pub mod yama {
     pub use super::modules::yama::{YamaScope, get_scope, set_scope};
 }
 
-use self::hooks::{LsmAlienAccessHook, LsmCapabilityHook};
-use crate::prelude::*;
+use self::hooks::{LsmAlienAccessHook, LsmCapabilityHook, LsmFileHook};
+pub use self::task::TaskSecurity;
+use crate::{prelude::*, process::posix_thread::PosixThread};
 
 bitflags! {
     /// LSM module flags.
@@ -31,12 +36,31 @@ bitflags! {
 }
 
 /// The common interface for built-in LSM modules.
-trait LsmModule: LsmAlienAccessHook + LsmCapabilityHook + Sync {
+trait LsmModule: LsmAlienAccessHook + LsmCapabilityHook + LsmFileHook + Sync {
     /// Returns the module name.
     fn name(&self) -> &'static str;
 
     /// Returns the module flags.
     fn flags(&self) -> LsmFlags;
+
+    /// Returns the module's task-attribute interface, if it has one.
+    fn task_attrs(&self) -> Option<&dyn LsmTaskAttrs> {
+        None
+    }
+
+    /// Returns the module's top-level securityfs node, if it has one.
+    fn securityfs_node(&self) -> Option<Arc<dyn SysObj>> {
+        None
+    }
+}
+
+/// An LSM interface exposed through `/proc/<pid>/attr`.
+trait LsmTaskAttrs: Sync {
+    /// Returns the module's `current` task attribute.
+    fn current(&self, posix_thread: &PosixThread) -> Result<String>;
+
+    /// Updates the module's `current` task attribute.
+    fn set_current(&self, posix_thread: &PosixThread, value: &str) -> Result<()>;
 }
 
 /// Returns whether the Yama LSM is enabled.
@@ -45,6 +69,11 @@ pub fn is_yama_enabled() -> bool {
         .iter()
         .any(|module| module.name() == "yama")
 }
+
+pub(crate) use self::{
+    securityfs::nodes as securityfs_nodes,
+    task::{set_task_attr_current, task_attr_current, task_attrs_enabled},
+};
 
 pub(super) fn init() {
     for module in modules::active_modules() {

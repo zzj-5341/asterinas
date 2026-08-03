@@ -22,6 +22,7 @@ use crate::{
         signal::{sig_mask::AtomicSigMask, sig_queues::SigQueues},
     },
     sched::{Nice, SchedPolicy},
+    security::lsm::TaskSecurity,
     thread::{Thread, Tid, task},
     time::{TimerManager, clocks::ProfClock},
     vm::vmar::VmarHandle,
@@ -35,6 +36,7 @@ pub struct PosixThreadBuilder {
     user_ctx: Box<UserContext>,
     process: Weak<Process>,
     credentials: Credentials,
+    security: TaskSecurity,
     vmar: VmarHandle,
 
     // Optional part
@@ -65,6 +67,7 @@ impl PosixThreadBuilder {
             user_ctx,
             process: Weak::new(),
             credentials,
+            security: TaskSecurity::new(),
             vmar,
             set_child_tid: 0,
             clear_child_tid: 0,
@@ -107,6 +110,12 @@ impl PosixThreadBuilder {
 
     pub fn sig_mask(mut self, sig_mask: AtomicSigMask) -> Self {
         self.sig_mask = sig_mask;
+        self
+    }
+
+    /// Sets the Linux Security Module state inherited by the new task.
+    pub fn security(mut self, security: TaskSecurity) -> Self {
+        self.security = security;
         self
     }
 
@@ -154,6 +163,7 @@ impl PosixThreadBuilder {
             user_ctx,
             process,
             credentials,
+            security,
             vmar,
             thread_name,
             set_child_tid,
@@ -190,6 +200,7 @@ impl PosixThreadBuilder {
                     tid: AtomicU32::new(tid),
                     name: Mutex::new(thread_name),
                     credentials,
+                    security,
                     fs: RwMutex::new(fs.clone()),
                     file_table: Mutex::new(Some(file_table.clone_ro())),
                     sig_mask,

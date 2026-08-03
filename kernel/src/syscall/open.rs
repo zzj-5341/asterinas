@@ -15,6 +15,7 @@ use crate::{
         },
     },
     prelude::*,
+    security,
     syscall::constants::MAX_FILENAME_LEN,
 };
 
@@ -96,7 +97,9 @@ fn do_open(
     };
 
     let file_handle: Arc<dyn FileLike> = match lookup_res {
-        LookupResult::Resolved(path) => Arc::new(path.open(open_args)?),
+        LookupResult::Resolved(path) => {
+            Arc::new(path.open_with_file_open_check(open_args, path_resolver)?)
+        }
         LookupResult::AtParent(result) => {
             if !open_args.creation_flags.contains(CreationFlags::O_CREAT)
                 || open_args.status_flags.contains(StatusFlags::O_PATH)
@@ -111,6 +114,19 @@ fn do_open(
             }
 
             let (parent, tail_name) = result.into_parent_and_basename();
+            // Preserve VFS/DAC error precedence without relying on a policy
+            // denial to stand in for an earlier creation error.
+            parent.check_dir_entry_mutation()?;
+            // Authorize before inserting the directory entry so a denial from
+            // this check does not itself create the requested file.
+            security::file_open_child(
+                &parent,
+                &tail_name,
+                path_resolver,
+                open_args.access_mode,
+                open_args.creation_flags,
+                open_args.status_flags,
+            )?;
             let new_path =
                 parent.new_fs_child(&tail_name, InodeType::File, open_args.inode_mode)?;
             fs::vfs::notify::on_create(&parent, || tail_name.clone());
@@ -138,6 +154,10 @@ fn do_open_tmpfile(
         path_resolver.lookup_no_follow(fs_path)?
     };
 
+    if !dir_path.inode().type_().is_directory() {
+        return_errno_with_message!(Errno::ENOTDIR, "O_TMPFILE path is not a directory");
+    }
+
     // `O_EXCL` with `O_TMPFILE` is allowed by Linux, but it prevents the tmpfile
     // from being linked later by `linkat(..., AT_EMPTY_PATH)`.
     // Reference: <https://man7.org/linux/man-pages/man2/open.2.html>.
@@ -146,8 +166,16 @@ fn do_open_tmpfile(
     } else {
         HardLinkability::Linkable
     };
-    let tmpfile_path = dir_path.create_tmpfile(open_args.inode_mode, hard_linkability)?;
 
+    dir_path.check_dir_entry_mutation()?;
+    security::file_open_tmpfile(
+        &dir_path,
+        path_resolver,
+        open_args.access_mode,
+        open_args.creation_flags,
+        open_args.status_flags,
+    )?;
+    let tmpfile_path = dir_path.create_tmpfile(open_args.inode_mode, hard_linkability)?;
     Ok(Arc::new(InodeHandle::new_unchecked_access(
         tmpfile_path,
         open_args.access_mode,

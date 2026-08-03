@@ -30,7 +30,7 @@ use crate::{
     process::{
         Gid, Uid, UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread,
     },
-    security::lsm::hooks as lsm_hooks,
+    security::{self, lsm::hooks as lsm_hooks},
 };
 
 mod dentry;
@@ -121,6 +121,47 @@ impl Path {
     ///
     /// Returns an `InodeHandle` on success.
     pub fn open(&self, open_args: OpenArgs) -> Result<InodeHandle> {
+        self.check_open_flags(&open_args)?;
+        self.truncate_for_open(&open_args)?;
+        InodeHandle::new(self.clone(), open_args.access_mode, open_args.status_flags)
+    }
+
+    /// Opens the `Path` on behalf of the `open` system call.
+    ///
+    /// Unlike kernel-internal opens, this entry point runs the file-open LSM
+    /// hook after the discretionary access check and before truncation.
+    pub(crate) fn open_with_file_open_check(
+        &self,
+        open_args: OpenArgs,
+        path_resolver: &PathResolver,
+    ) -> Result<InodeHandle> {
+        self.check_open_flags(&open_args)?;
+
+        let inode = self.inode().as_ref();
+        if !open_args.status_flags.contains(StatusFlags::O_PATH) {
+            inode.check_permission(open_args.access_mode.into())?;
+            if inode.type_() == InodeType::Dir && open_args.access_mode.is_writable() {
+                return_errno_with_message!(Errno::EISDIR, "a directory cannot be opened writable");
+            }
+        }
+
+        security::file_open(
+            self,
+            path_resolver,
+            open_args.access_mode,
+            open_args.creation_flags,
+            open_args.status_flags,
+        )?;
+        self.truncate_for_open(&open_args)?;
+
+        InodeHandle::new_unchecked_access(
+            self.clone(),
+            open_args.access_mode,
+            open_args.status_flags,
+        )
+    }
+
+    fn check_open_flags(&self, open_args: &OpenArgs) -> Result<()> {
         let inode = self.inode().as_ref();
         let inode_type = inode.type_();
         let creation_flags = &open_args.creation_flags;
@@ -151,14 +192,18 @@ impl Path {
             );
         }
 
-        if inode_type.is_regular_file()
-            && creation_flags.contains(CreationFlags::O_TRUNC)
-            && !status_flags.contains(StatusFlags::O_PATH)
+        Ok(())
+    }
+
+    fn truncate_for_open(&self, open_args: &OpenArgs) -> Result<()> {
+        if self.inode().type_().is_regular_file()
+            && open_args.creation_flags.contains(CreationFlags::O_TRUNC)
+            && !open_args.status_flags.contains(StatusFlags::O_PATH)
         {
             self.resize(0)?;
         }
 
-        InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+        Ok(())
     }
 
     /// Gets the parent `Path` within the same mount.
@@ -261,7 +306,7 @@ impl Path {
     }
 
     /// Checks whether a directory entry may be modified in this directory.
-    fn check_dir_entry_mutation(&self) -> Result<()> {
+    pub(crate) fn check_dir_entry_mutation(&self) -> Result<()> {
         self.check_mount_writable()?;
         self.inode()
             .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
