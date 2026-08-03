@@ -71,7 +71,33 @@ Notes:
 - Yama remains enabled as the default optional module.
 - This parameter is ignored when `lsm` is also specified.
 
-The current AppArmor prototype mediates only the `open` system call.
+#### AppArmor prototype scope
+
+The current AppArmor implementation is a minimal, functional skeleton. It
+provides exact-path, open-time file access mediation as a foundation for future
+AppArmor development, but it is not yet a complete security boundary.
+
+The prototype currently:
+
+- loads text profiles through `/sys/kernel/security/apparmor/.load`;
+- exposes loaded profiles through `/sys/kernel/security/apparmor/profiles`;
+- attaches a profile through `/proc/self/attr/current` and inherits the label
+  across clone and fork;
+- mediates exact canonical absolute paths with read (`r`) and write (`w`)
+  permissions for `open`, `openat`, and `creat`, including file creation and
+  truncation; and
+- denies unlisted paths by default. `O_PATH` is intentionally not mediated,
+  while `O_TMPFILE` is denied for confined tasks because it has no reachable
+  pathname.
+
+Policy loading currently requires the complete profile to be submitted in one
+write of at most 4096 bytes. Streaming or multi-write policy loading is not
+supported. Path reconstruction is also not hardened against concurrent rename
+or mount-topology changes.
+
+Execution, delete, rename, link, mount, access through existing file
+descriptors, memory mapping, profile transitions, complain mode, auditing,
+namespaces, and the complete Linux AppArmor userspace ABI remain out of scope.
 
 ### `virtio_mmio.device`
 
