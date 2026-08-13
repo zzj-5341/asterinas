@@ -81,6 +81,7 @@ name = "aster-bigtcp"
 version = "0.1.0"
 dependencies = [
  "aster-softirq",
+ "aster-util",
  "bitflags 1.3.2",
  "int-to-c-enum",
  "jhash",
@@ -128,11 +129,78 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster-core"
+version = "0.1.0"
+dependencies = [
+ "align_ext",
+ "aster-bigtcp",
+ "aster-block",
+ "aster-cmdline",
+ "aster-console",
+ "aster-framebuffer",
+ "aster-fuse",
+ "aster-i8042",
+ "aster-input",
+ "aster-logger",
+ "aster-network",
+ "aster-nvme",
+ "aster-rights",
+ "aster-rights-proc",
+ "aster-softirq",
+ "aster-systree",
+ "aster-time",
+ "aster-uart",
+ "aster-util",
+ "aster-virtio",
+ "atomic-integer-wrapper",
+ "bitflags 1.3.2",
+ "bitvec",
+ "component",
+ "const_format",
+ "cpio-decoder",
+ "device-id",
+ "getset",
+ "hashbrown 0.14.5",
+ "id-alloc",
+ "inherit-methods-macro",
+ "int-to-c-enum",
+ "intrusive-collections",
+ "io-util",
+ "jhash",
+ "keyable-arc",
+ "lending-iterator",
+ "logo-ascii-art",
+ "loongArch64",
+ "lru",
+ "no_std_io2",
+ "osdk-frame-allocator",
+ "osdk-heap-allocator",
+ "ostd",
+ "ostd-pod",
+ "paste",
+ "rand",
+ "ring-buffer",
+ "riscv",
+ "short-vis-path",
+ "smallvec",
+ "sparse-id-alloc",
+ "spin",
+ "takeable",
+ "tdx-guest",
+ "time",
+ "typeflags",
+ "typeflags-util",
+ "x86_64",
+ "xarray",
+ "xmas-elf",
+ "zerocopy",
+ "zune-inflate",
+]
+
+[[package]]
 name = "aster-framebuffer"
 version = "0.1.0"
 dependencies = [
- "aster-console",
- "aster-input",
  "bitflags 1.3.2",
  "component",
  "font8x8",
@@ -175,77 +243,6 @@ dependencies = [
  "ostd-pod",
  "spin",
  "zerocopy",
-]
-
-[[package]]
-name = "aster-kernel"
-version = "0.1.0"
-dependencies = [
- "align_ext",
- "aster-bigtcp",
- "aster-block",
- "aster-cmdline",
- "aster-console",
- "aster-framebuffer",
- "aster-fuse",
- "aster-i8042",
- "aster-input",
- "aster-logger",
- "aster-mlsdisk",
- "aster-network",
- "aster-nvme",
- "aster-rights",
- "aster-rights-proc",
- "aster-softirq",
- "aster-systree",
- "aster-time",
- "aster-uart",
- "aster-util",
- "aster-virtio",
- "atomic-integer-wrapper",
- "bitflags 1.3.2",
- "bitvec",
- "cfg-if",
- "component",
- "const_format",
- "controlled",
- "cpio-decoder",
- "device-id",
- "getset",
- "hashbrown 0.14.5",
- "id-alloc",
- "inherit-methods-macro",
- "int-to-c-enum",
- "intrusive-collections",
- "io-util",
- "jhash",
- "keyable-arc",
- "lending-iterator",
- "logo-ascii-art",
- "loongArch64",
- "lru",
- "no_std_io2",
- "osdk-frame-allocator",
- "osdk-heap-allocator",
- "ostd",
- "ostd-pod",
- "paste",
- "rand",
- "ring-buffer",
- "riscv",
- "smallvec",
- "sparse-id-alloc",
- "spin",
- "takeable",
- "tdx-guest",
- "time",
- "typeflags",
- "typeflags-util",
- "x86_64",
- "xarray",
- "xmas-elf",
- "zerocopy",
- "zune-inflate",
 ]
 
 [[package]]
@@ -315,7 +312,6 @@ version = "0.1.0"
 dependencies = [
  "align_ext",
  "bitflags 1.3.2",
- "cfg-if",
  "component",
  "fdt",
  "int-to-c-enum",
@@ -327,7 +323,6 @@ dependencies = [
 name = "aster-rights"
 version = "0.1.0"
 dependencies = [
- "aster-rights-proc",
  "bitflags 1.3.2",
  "typeflags",
  "typeflags-util",
@@ -417,7 +412,6 @@ dependencies = [
  "aster-pci",
  "aster-rights",
  "aster-softirq",
- "aster-systree",
  "aster-util",
  "bitflags 1.3.2",
  "component",
@@ -432,6 +426,14 @@ dependencies = [
  "tdx-guest",
  "typeflags-util",
  "zerocopy",
+]
+
+[[package]]
+name = "asterinas"
+version = "0.1.0"
+dependencies = [
+ "aster-core",
+ "ostd",
 ]
 
 [[package]]
@@ -593,15 +595,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "controlled"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "cpio-decoder"
 version = "0.1.0"
 dependencies = [
@@ -633,15 +626,6 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
-
-[[package]]
-name = "ctor"
-version = "0.1.25"
-source = "git+https://github.com/asterinas/rust-ctor#e30a5d960a3eccf79a7caddfa4de43b5dce424a0"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
 
 [[package]]
 name = "ctr"
@@ -874,17 +858,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ghost"
-version = "0.1.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a98e63051fe9c677bcfd96934a67f3506ec24254c159bf5ad14aa7c833a6237f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "gimli"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -892,9 +865,9 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 
 [[package]]
 name = "gimli"
-version = "0.33.0"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
+checksum = "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
 
 [[package]]
 name = "hash32"
@@ -1036,11 +1009,11 @@ dependencies = [
 
 [[package]]
 name = "inventory"
-version = "0.3.3"
-source = "git+https://github.com/asterinas/inventory?rev=9dce587#9dce58712d1cd1e51ff067634d42b5c5fea29f48"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
 dependencies = [
- "ctor",
- "ghost",
+ "rustversion",
 ]
 
 [[package]]
@@ -1173,7 +1146,6 @@ dependencies = [
 name = "linux-bzimage-setup"
 version = "0.18.0"
 dependencies = [
- "cfg-if",
  "linux-boot-params",
  "log",
  "tdx-guest",
@@ -1392,14 +1364,11 @@ dependencies = [
  "bit_field",
  "bitflags 1.3.2",
  "bitvec",
- "cfg-if",
  "fdt",
  "gimli 0.28.1",
- "iced-x86",
  "id-alloc",
  "inherit-methods-macro",
  "int-to-c-enum",
- "intrusive-collections",
  "linux-boot-params",
  "log",
  "loongArch64",
@@ -1519,6 +1488,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -1775,6 +1754,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "short-vis-path"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
 
 [[package]]
 name = "simd-adler32"
@@ -2084,11 +2073,11 @@ dependencies = [
 
 [[package]]
 name = "unwinding"
-version = "0.2.9"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ac8808f11429cd2a9323c960cfca5f3da45bcc5717cc82f51721a3f2213056d"
+checksum = "4b134ada16dda9e435abe2a6d76a01d497bc60707357845a15f9b0ed42dc88ce"
 dependencies = [
- "gimli 0.33.0",
+ "gimli 0.34.0",
 ]
 
 [[package]]

@@ -18,9 +18,13 @@
 
 use core::arch::{asm, global_asm};
 
-use crate::arch::cpu::{
-    context::GeneralRegs,
-    extension::{IsaExtensions, has_extensions},
+use crate::{
+    arch::cpu::{
+        context::GeneralRegs,
+        extension::{IsaExtensions, has_extensions},
+    },
+    irq::DisabledLocalIrqGuard,
+    mm::fault::TrapFrameApi,
 };
 
 /// FPU status bits.
@@ -83,6 +87,16 @@ pub struct TrapFrame {
     pub sepc: usize,
 }
 
+impl TrapFrameApi for TrapFrame {
+    fn set_instruction_pointer(&mut self, ip: usize) {
+        self.sepc = ip;
+    }
+
+    fn instruction_pointer(&self) -> usize {
+        self.sepc
+    }
+}
+
 /// Saved registers on a trap.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -120,11 +134,7 @@ impl RawUserContext {
     ///
     /// On return, the context will be reset to the status before the trap.
     /// Trap reason and error code will be placed at `scause` and `stval`.
-    pub(in crate::arch) fn run(&mut self) {
-        let guard = crate::irq::disable_local();
-
-        crate::task::call_pre_user_run_handler(&guard);
-
+    pub(in crate::arch) fn run(&mut self, guard: DisabledLocalIrqGuard) {
         // Return to userspace with interrupts disabled. Otherwise, interrupts
         // after switching `sscratch` will mess up the CPU state.
         core::mem::forget(guard);

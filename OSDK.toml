@@ -10,6 +10,7 @@ boot_protocol = "multiboot2"
 
 [qemu]
 args = "$(./tools/qemu_args.sh normal)"
+log_file = "qemu-serial.log"
 
 # Special options for running
 [run.boot]
@@ -19,10 +20,8 @@ kcmd_args = [
     "HOME=/",
     "USER=root",
     "PATH=/bin:/benchmark",
-    "init=/init",
 ]
 init_args = ["sh", "-l"]
-initramfs = "test/initramfs/build/initramfs.cpio.gz"
 
 # Special options for testing
 [test.qemu]

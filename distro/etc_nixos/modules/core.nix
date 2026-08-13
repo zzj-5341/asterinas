@@ -1,7 +1,7 @@
 { config, lib, pkgs, options, ... }:
 let
   kernel = builtins.path {
-    name = "aster-kernel-osdk-bin";
+    name = "asterinas-osdk-bin";
     path = config.aster_nixos.kernel;
   };
   stage-1-init = pkgs.writeShellScript "stage-1-init" ''
@@ -62,6 +62,7 @@ let
   };
 in {
   boot.loader.grub.enable = true;
+  boot.loader.grub.configurationLimit = 1;
   boot.loader.grub.efiSupport = true;
   boot.loader.grub.device = "nodev";
   boot.loader.grub.efiInstallAsRemovable = true;
@@ -78,17 +79,14 @@ in {
   # TODO: Fix errors and warnings from systemd and remove this setting.
   environment.sessionVariables = { SYSTEMD_LOG_LEVEL = "crit"; };
   system.systemBuilderCommands = ''
-    echo "PATH=/bin:/nix/var/nix/profiles/system/sw/bin earlycon loglevel=${config.aster_nixos.log-level} console=${config.aster_nixos.console} -- sh /init root=/dev/vda2 init=/nix/var/nix/profiles/system/stage-2-init rd.break=${
+    echo "PATH=/bin:/nix/var/nix/profiles/system/sw/bin earlycon loglevel=${config.aster_nixos.log-level} console=${config.aster_nixos.console} -- root=/dev/vda2 init=/nix/var/nix/profiles/system/init rd.break=${
       if config.aster_nixos.break-into-stage-1-shell then "1" else "0"
     }"  > $out/kernel-params
-    mv $out/init $out/stage-2-init
-    sed -i 's_^\([[:space:]]*\)\(exec > >(tee -i /run/log/stage-2-init.log) 2>&1\)$_\1# \2_' $out/stage-2-init
+    sed -i 's_^\([[:space:]]*\)\(exec > >(tee -i /run/log/stage-2-init.log) 2>&1\)$_\1# \2_' $out/init
     if [ "${config.aster_nixos.disable-systemd}" = "true" ]; then
-      sed -i 's/^[[:space:]]*echo "starting systemd..."$/# &/' $out/stage-2-init
-      sed -i 's/^[[:space:]]*exec \/run\/current-system\/systemd\/lib\/systemd\/systemd "$@"$/# &/' $out/stage-2-init
+      sed -i 's/^[[:space:]]*echo "starting systemd..."$/# &/' $out/init
+      sed -i 's/^[[:space:]]*exec \/run\/current-system\/systemd\/lib\/systemd\/systemd "$@"$/# &/' $out/init
     fi
-    rm -rf $out/init
-    ln -s /bin/busybox $out/init
     ln -s ${kernel} $out/kernel
     ln -s ${initramfs}/initrd $out/initrd
   '';

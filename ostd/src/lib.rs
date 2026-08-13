@@ -10,6 +10,7 @@
 #![feature(negative_impls)]
 #![feature(ptr_metadata)]
 #![feature(sync_unsafe_cell)]
+#![cfg_attr(target_arch = "riscv64", feature(riscv_ext_intrinsics))]
 #![cfg_attr(target_arch = "x86_64", feature(iter_advance_by, macro_metavar_expr))]
 #![expect(internal_features)]
 #![no_std]
@@ -36,7 +37,6 @@ pub mod bus;
 pub mod console;
 pub mod cpu;
 mod error;
-mod ex_table;
 pub mod io;
 pub mod irq;
 pub mod log;

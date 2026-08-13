@@ -6,7 +6,6 @@ use alloc::boxed::Box;
 use core::arch::x86_64::{_fxrstor64, _fxsave64, _xrstor64, _xsave64};
 
 use bitflags::bitflags;
-use cfg_if::cfg_if;
 use ostd_pod::{FromZeros, IntoBytes};
 use spin::Once;
 use x86::bits64::segmentation::{rdfsbase, rdgsbase, swapgs, wrfsbase, wrgsbase};
@@ -25,11 +24,11 @@ use crate::{
     debug,
     irq::{DisabledLocalIrqGuard, call_irq_callback_functions},
     mm::Vaddr,
-    user::{ReturnReason, UserContextApi, UserContextApiInternal},
+    user::{ReturnReason, UserContextApi, UserContextApiInternal, UserModeHooks},
 };
 
-cfg_if! {
-    if #[cfg(feature = "cvm_guest")] {
+cfg_select! {
+    feature = "cvm_guest" => {
         mod tdx;
 
         use tdx::VirtualizationExceptionHandler;
@@ -304,10 +303,7 @@ impl UserContext {
 }
 
 impl UserContextApiInternal for UserContext {
-    fn execute<F>(&mut self, mut has_kernel_event: F) -> ReturnReason
-    where
-        F: FnMut() -> bool,
-    {
+    fn execute<T: UserModeHooks>(&mut self, hooks: &T) -> ReturnReason {
         // set interrupt flag so that in user mode it can receive external interrupts
         // set ID flag which means cpu support CPUID instruction
         self.user_context.general.rflags |= (RFlags::INTERRUPT_FLAG | RFlags::ID).bits() as usize;
@@ -317,7 +313,10 @@ impl UserContextApiInternal for UserContext {
         // Return when it is syscall or cpu exception type is Fault or Trap.
         loop {
             crate::task::scheduler::might_preempt();
-            self.user_context.run();
+
+            let guard = crate::irq::disable_local();
+            hooks.pre_user_run(&guard);
+            self.user_context.run(guard);
 
             let exception =
                 CpuException::new(self.user_context.trap_num, self.user_context.error_code);
@@ -337,7 +336,7 @@ impl UserContextApiInternal for UserContext {
                 }
                 Some(exception) => {
                     panic!(
-                        "cannot handle user CPU exception: {:?}, trapframe: {:?}",
+                        "Cannot handle user CPU exception: {:?}; trapframe: {:?}",
                         exception,
                         self.as_trap_frame()
                     );
@@ -356,7 +355,7 @@ impl UserContextApiInternal for UserContext {
                 }
             }
 
-            if has_kernel_event() {
+            if hooks.has_kernel_event() {
                 break ReturnReason::KernelEvent;
             }
         }
@@ -468,14 +467,6 @@ bitflags! {
 }
 
 impl UserContextApi for UserContext {
-    fn trap_number(&self) -> usize {
-        self.user_context.trap_num
-    }
-
-    fn trap_error_code(&self) -> usize {
-        self.user_context.error_code
-    }
-
     fn set_instruction_pointer(&mut self, ip: usize) {
         self.set_rip(ip);
     }
