@@ -30,6 +30,7 @@ use crate::{
             signals::kernel::KernelSignal,
         },
     },
+    security::lsm,
     vm::vmar::VmarHandle,
 };
 
@@ -52,19 +53,20 @@ pub(crate) fn do_execve(
     let fs_ref = ctx.thread_local.borrow_fs();
     let path_resolver = fs_ref.resolver().read();
 
+    let executable_path = executable.path().clone();
+    let executable_abs_path = path_resolver.make_abs_path(&executable_path).into_string();
     debug!(
         "file path: {:?}, argv = {:?}, envp = {:?}",
-        path_resolver.make_abs_path(executable.path()).into_string(),
-        argv,
-        envp
+        executable_abs_path, argv, envp
     );
 
-    let executable_path = executable.path().clone();
     let program_to_load = ProgramToLoad::from_executable(executable, &path_resolver, argv, envp)?;
     let exec_cred = prepare_exec_cred(program_to_load.elf_path(), ctx)?;
 
     let new_vmar = VmarHandle::new(ProcessVm::new(executable_path.clone()));
     let elf_load_info = program_to_load.load_to_vmar(&new_vmar, &path_resolver)?;
+    let prepared_lsm_states =
+        lsm::prepare_task_exec(ctx.posix_thread, executable_abs_path.as_bytes())?;
 
     // Ensure no other thread is concurrently performing exit_group or execve.
     // If such an operation is in progress, return EAGAIN.
@@ -96,6 +98,7 @@ pub(crate) fn do_execve(
     );
 
     if res.is_ok() {
+        lsm::commit_task_exec(ctx.posix_thread, prepared_lsm_states);
         ctx.posix_thread
             .ptrace_may_stop_on(PtraceEvent::Exec(former_tid), ctx, user_context);
     } else {
