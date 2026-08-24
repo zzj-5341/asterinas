@@ -13,6 +13,7 @@ pub(crate) mod overlayfs;
 pub(crate) mod procfs;
 pub(crate) mod pseudofs;
 pub(crate) mod ramfs;
+pub(crate) mod securityfs;
 pub(crate) mod sysfs;
 pub(crate) mod tmpfs;
 pub(crate) mod virtiofs;
