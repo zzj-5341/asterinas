@@ -3,8 +3,28 @@
 use super::super::{TaskState, modules};
 use crate::{
     prelude::*,
-    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::PosixThread},
+    process::{
+        UserNamespace,
+        credentials::capabilities::CapSet,
+        posix_thread::{AsPosixThread, PosixThread},
+    },
 };
+
+/// Checks one Linux capability for the current POSIX thread in the initial user namespace.
+pub fn require_current_capability(capability_number: u8) -> Result<()> {
+    let required_cap = CapSet::from_capability_number(u64::from(capability_number))
+        .ok_or_else(|| Error::new(Errno::EINVAL))?;
+    let current = current_thread!();
+    let posix_thread = current
+        .as_posix_thread()
+        .ok_or_else(|| Error::new(Errno::EINVAL))?;
+
+    on_capable(CapabilityContext::new(
+        UserNamespace::get_init_singleton().as_ref(),
+        posix_thread,
+        required_cap,
+    ))
+}
 
 /// Runs capability hooks in module order.
 pub(crate) fn on_capable(context: CapabilityContext) -> Result<()> {

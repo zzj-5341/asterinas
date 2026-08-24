@@ -11,7 +11,7 @@ pub(crate) use self::{
 };
 pub use self::{
     alien_access::{AlienAccessContext, AlienAccessKind},
-    capability::CapabilityContext,
+    capability::{CapabilityContext, require_current_capability},
 };
 use super::TaskState;
 use crate::prelude::*;
