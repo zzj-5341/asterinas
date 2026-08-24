@@ -4,10 +4,7 @@ use core::sync::atomic::{AtomicI32, Ordering};
 
 use atomic_integer_wrapper::define_atomic_version_of_integer_like_type;
 
-use super::super::{
-    LsmFlags, LsmModule,
-    hooks::{AlienAccessContext, LsmAlienAccessHook, LsmCapabilityHook},
-};
+use super::super::{LsmFlags, LsmModule, hooks::AlienAccessContext};
 use crate::{
     prelude::*,
     process::{
@@ -23,8 +20,16 @@ pub(crate) static YAMA_LSM: YamaLsm = YamaLsm;
 /// The Yama minor LSM.
 pub(crate) struct YamaLsm;
 
-impl LsmAlienAccessHook for YamaLsm {
-    fn on_alien_access(&self, context: &AlienAccessContext) -> Result<()> {
+impl LsmModule for YamaLsm {
+    fn name(&self) -> &'static str {
+        "yama"
+    }
+
+    fn flags(&self) -> LsmFlags {
+        LsmFlags::empty()
+    }
+
+    fn on_alien_access(&self, context: &AlienAccessContext<'_>) -> Result<()> {
         if context.mode().kind() != AlienAccessKind::Attach {
             return Ok(());
         }
@@ -59,18 +64,6 @@ impl LsmAlienAccessHook for YamaLsm {
         Ok(())
     }
 }
-
-impl LsmModule for YamaLsm {
-    fn name(&self) -> &'static str {
-        "yama"
-    }
-
-    fn flags(&self) -> LsmFlags {
-        LsmFlags::empty()
-    }
-}
-
-impl LsmCapabilityHook for YamaLsm {}
 
 /// Returns the current Yama scope for alien access.
 pub(crate) fn get_scope() -> YamaScope {

@@ -17,12 +17,14 @@ pub(crate) mod yama {
     pub(crate) use super::modules::yama::{YamaScope, get_scope, set_scope};
 }
 
-use self::hooks::{LsmAlienAccessHook, LsmCapabilityHook};
+use spin::Once;
+
+pub use self::hooks::{AlienAccessContext, CapabilityContext};
 use crate::prelude::*;
 
 bitflags! {
     /// LSM module flags.
-    pub(crate) struct LsmFlags: u32 {
+    pub struct LsmFlags: u32 {
         /// Marks a module as selectable through the legacy `security=` parameter.
         const LEGACY_MAJOR = 1 << 0;
         /// Marks a module as mutually exclusive with other exclusive modules.
@@ -30,13 +32,42 @@ bitflags! {
     }
 }
 
-/// The common interface for built-in LSM modules.
-trait LsmModule: LsmAlienAccessHook + LsmCapabilityHook + Sync {
+/// The common interface for LSM modules.
+pub trait LsmModule: Send + Sync {
     /// Returns the module name.
     fn name(&self) -> &'static str;
 
     /// Returns the module flags.
     fn flags(&self) -> LsmFlags;
+
+    /// Initializes an active module.
+    fn init(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Checks whether a thread holds a capability in a user namespace.
+    fn on_capable(&self, _context: &CapabilityContext<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Handles an alien access attempt.
+    fn on_alien_access(&self, _context: &AlienAccessContext<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// An LSM module registration failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistrationError {
+    /// A built-in or extension module already uses the name.
+    DuplicateName,
+    /// Active-module selection has already started.
+    SelectionClosed,
+}
+
+/// Registers an extension LSM before active-module selection.
+pub fn register(module: &'static dyn LsmModule) -> core::result::Result<(), RegistrationError> {
+    modules::register(module)
 }
 
 /// Returns whether the Yama LSM is enabled.
@@ -46,8 +77,15 @@ pub(crate) fn is_yama_enabled() -> bool {
         .any(|module| module.name() == "yama")
 }
 
+static INITIALIZED: Once<()> = Once::new();
+
 pub(super) fn init() {
-    for module in modules::active_modules() {
-        info!("[kernel] LSM module enabled: {}", module.name());
-    }
+    INITIALIZED.call_once(|| {
+        for module in modules::active_modules() {
+            module.init().unwrap_or_else(|error| {
+                panic!("failed to initialize LSM `{}`: {error:?}", module.name())
+            });
+            info!("[kernel] LSM module enabled: {}", module.name());
+        }
+    });
 }

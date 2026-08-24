@@ -2,7 +2,7 @@
 
 use super::super::{
     LsmFlags, LsmModule,
-    hooks::{AlienAccessContext, CapableContext, LsmAlienAccessHook, LsmCapabilityHook},
+    hooks::{AlienAccessContext, CapabilityContext, CapableContext},
 };
 use crate::{
     prelude::*,
@@ -22,10 +22,8 @@ impl LsmModule for CapabilityLsm {
     fn flags(&self) -> LsmFlags {
         LsmFlags::empty()
     }
-}
 
-impl LsmCapabilityHook for CapabilityLsm {
-    fn on_capable(&self, context: &CapableContext) -> Result<()> {
+    fn on_capable(&self, context: &CapabilityContext<'_>) -> Result<()> {
         // Since creating new user namespaces is not supported at the moment,
         // there is effectively only one user namespace in the entire system.
         // Therefore, the thread has a single set of capabilities used for permission checks.
@@ -45,10 +43,8 @@ impl LsmCapabilityHook for CapabilityLsm {
             "the thread does not have the required capability"
         );
     }
-}
 
-impl LsmAlienAccessHook for CapabilityLsm {
-    fn on_alien_access(&self, context: &AlienAccessContext) -> Result<()> {
+    fn on_alien_access(&self, context: &AlienAccessContext<'_>) -> Result<()> {
         let accessor_cred = context.accessor().credentials();
         let (caller_uid, caller_gid) = match context.mode().creds() {
             CredsSource::FsCreds => (accessor_cred.fsuid(), accessor_cred.fsgid()),
