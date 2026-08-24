@@ -4,9 +4,14 @@
 
 #![no_std]
 #![deny(unsafe_code)]
+#![feature(allocator_api)]
+
+extern crate alloc;
 
 use aster_core::security::lsm::{LsmFlags, LsmModule};
 use component::{ComponentInitError, init_component};
+
+mod policy;
 
 static APPARMOR_LSM: AppArmorLsm = AppArmorLsm;
 
