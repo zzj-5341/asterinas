@@ -17,6 +17,9 @@ inputs:
   scheme:
     description: 'Test scheme (default/microvm/iommu)'
     required: false
+  cmdline:
+    description: 'Kernel command line arguments'
+    required: false
 
   # VM Setup
   boot_protocol:
@@ -110,6 +113,7 @@ runs:
         [[ -n "${{ inputs.boot_protocol }}" ]] && CMD+=" BOOT_PROTOCOL=${{ inputs.boot_protocol }}"
         [[ -n "${{ inputs.mem }}" ]] && CMD+=" MEM=${{ inputs.mem }}"
         [[ "${{ inputs.rootfs_boot }}" == "true" ]] && CMD+=" INITRAMFS=off CMDLINE='root=/dev/vdd rootfstype=ext2 init=/init'"
+        [[ -n "${{ inputs.cmdline }}" ]] && CMD+=" CMDLINE='${{ inputs.cmdline }}'"
         [[ -n "${{ inputs.xfstests_fs_type }}" ]] && CMD+=" XFSTESTS_FS_TYPE=${{ inputs.xfstests_fs_type }}"
         [[ -n "${{ inputs.xfstests_runlist }}" ]] && CMD+=" XFSTESTS_RUNLIST=${{ inputs.xfstests_runlist }}"
         [[ -n "${{ inputs.xfstests_disk_size }}" ]] && CMD+=" XFSTESTS_DISK_SIZE=${{ inputs.xfstests_disk_size }}"

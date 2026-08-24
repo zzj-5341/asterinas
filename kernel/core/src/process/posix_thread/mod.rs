@@ -24,6 +24,7 @@ use crate::{
         posix_thread::ptrace::TraceeStatus,
         signal::{PauseReason, PollHandle, sig_mask::SigMask},
     },
+    security::lsm::{TaskState, TaskStates},
     thread::{Thread, Tid},
     time::{Timer, TimerManager, clocks::ProfClock, timer::TimerGuard},
 };
@@ -106,6 +107,9 @@ pub(crate) struct PosixThread {
 
     /// The personality value for this thread.
     personality: AtomicU32,
+
+    /// Opaque per-module state in active LSM order.
+    lsm_task_states: SpinLock<TaskStates>,
 }
 
 impl PosixThread {
@@ -341,6 +345,20 @@ impl PosixThread {
     /// Returns the exit code of this thread.
     pub(crate) fn exit_code(&self) -> ExitCode {
         self.exit_code.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn lsm_task_state(&self, index: usize) -> Option<TaskState> {
+        self.lsm_task_states
+            .lock()
+            .get(index)
+            .expect("LSM task-state order must match the active module stack")
+            .clone()
+    }
+
+    pub(crate) fn replace_lsm_task_states(&self, states: TaskStates) {
+        let mut current = self.lsm_task_states.lock();
+        assert_eq!(current.len(), states.len());
+        *current = states;
     }
 }
 

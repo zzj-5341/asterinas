@@ -309,6 +309,11 @@ ifeq ($(AUTO_TEST), conformance)
 else ifeq ($(AUTO_TEST), regression)
 	@tail --lines 100 qemu.log | grep -q "^All regression tests passed." \
 		|| (echo "Regression test failed" && exit 1)
+ifneq ($(findstring apparmor,$(CMDLINE)),)
+	@grep -Eq 'operation="capability" profile="/test/security/lsm/apparmor-enforce" task_id="[0-9]+" capability="18" mode="enforce" result="enforced"' qemu.log
+	@grep -Eq 'operation="capability" profile="/test/security/lsm/apparmor-complain" task_id="[0-9]+" capability="18" mode="complain" result="report-only"' qemu.log
+	@grep -Eq 'operation="ptrace" profile="unconfined" task_id="[0-9]+" target_id="[0-9]+" mode="enforce" result="enforced"' qemu.log
+endif
 else ifeq ($(AUTO_TEST), boot)
 	@tail --lines 100 qemu.log | grep -q "^Successfully booted." \
 		|| (echo "Boot test failed" && exit 1)

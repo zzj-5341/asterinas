@@ -32,6 +32,7 @@ use crate::{
         stats::PROCESS_CREATION_COUNTER,
     },
     sched::Nice,
+    security::lsm,
     thread::{AsThread, Tid},
     vm::vmar::{Vmar, VmarHandle},
 };
@@ -436,6 +437,8 @@ fn clone_child_task(
     // Inherit the thread name.
     let thread_name = *posix_thread.thread_name().lock();
 
+    let child_lsm_states = lsm::clone_task_states(posix_thread)?;
+
     let child_tid = allocate_posix_tid();
     let child_task = {
         let credentials = {
@@ -451,6 +454,7 @@ fn clone_child_task(
             child_vmar,
         )
         .process(posix_thread.weak_process().clone())
+        .lsm_task_states(child_lsm_states)
         .sig_mask(sig_mask)
         .file_table(child_file_table)
         .fs(child_fs)
@@ -468,7 +472,7 @@ fn clone_child_task(
         thread_builder = clone_child_cleartid(thread_builder, clone_args.child_tid, clone_flags);
         thread_builder = clone_child_settid(thread_builder, clone_args.child_tid, clone_flags);
 
-        thread_builder.build()
+        thread_builder.build()?
     };
 
     process
@@ -566,6 +570,7 @@ fn clone_child_process(
     let child_oom_score_adj = process.oom_score_adj().load(Ordering::Relaxed);
 
     let child_tid = allocate_posix_tid();
+    let child_lsm_states = lsm::clone_task_states(posix_thread)?;
 
     let child = {
         let child_vmar_arc = child_vmar.clone_arc();
@@ -586,6 +591,7 @@ fn clone_child_process(
                 credentials,
                 child_vmar,
             )
+            .lsm_task_states(child_lsm_states)
             .sig_mask(child_sig_mask)
             .file_table(child_file_table)
             .fs(child_fs)
@@ -618,7 +624,7 @@ fn clone_child_process(
             child_user_ns,
             child_thread_builder,
         )
-    };
+    }?;
 
     clone_pidfd(ctx, &child, clone_flags, clone_args.pidfd)?;
 
@@ -840,7 +846,7 @@ fn create_child_process(
     sig_dispositions: Arc<Mutex<SigDispositions>>,
     user_ns: Arc<UserNamespace>,
     thread_builder: PosixThreadBuilder,
-) -> Arc<Process> {
+) -> Result<Arc<Process>> {
     let child_proc = Process::new(
         pid,
         vmar,
@@ -851,10 +857,12 @@ fn create_child_process(
         user_ns,
     );
 
-    let child_task = thread_builder.process(Arc::downgrade(&child_proc)).build();
+    let child_task = thread_builder
+        .process(Arc::downgrade(&child_proc))
+        .build()?;
     child_proc.tasks().lock().insert(child_task).unwrap();
 
-    child_proc
+    Ok(child_proc)
 }
 
 fn set_parent_and_group(clone_flags: CloneFlags, parent: &Arc<Process>, child: &Arc<Process>) {

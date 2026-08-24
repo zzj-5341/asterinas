@@ -22,6 +22,7 @@ use crate::{
         signal::{sig_mask::AtomicSigMask, sig_queues::SigQueues},
     },
     sched::{Nice, SchedPolicy},
+    security::lsm::{self, TaskStates},
     thread::{Thread, Tid, task},
     time::{TimerManager, clocks::ProfClock},
     vm::vmar::VmarHandle,
@@ -49,6 +50,7 @@ pub(crate) struct PosixThreadBuilder {
     user_ns: Option<Arc<UserNamespace>>,
     ns_proxy: Option<Arc<NsProxy>>,
     default_timer_slack_ns: u64,
+    lsm_task_states: Option<TaskStates>,
 }
 
 impl PosixThreadBuilder {
@@ -77,6 +79,7 @@ impl PosixThreadBuilder {
             user_ns: None,
             ns_proxy: None,
             default_timer_slack_ns: 50_000, // 50 usec default slack
+            lsm_task_states: None,
         }
     }
 
@@ -148,7 +151,12 @@ impl PosixThreadBuilder {
         self
     }
 
-    pub(crate) fn build(self) -> Arc<Task> {
+    pub(crate) fn lsm_task_states(mut self, states: TaskStates) -> Self {
+        self.lsm_task_states = Some(states);
+        self
+    }
+
+    pub(crate) fn build(self) -> Result<Arc<Task>> {
         let Self {
             tid,
             user_ctx,
@@ -167,7 +175,13 @@ impl PosixThreadBuilder {
             user_ns,
             ns_proxy,
             default_timer_slack_ns,
+            lsm_task_states,
         } = self;
+
+        let lsm_task_states = match lsm_task_states {
+            Some(states) => states,
+            None => lsm::initialize_task_states()?,
+        };
 
         let file_table = file_table.unwrap_or_else(FileTable::new);
 
@@ -178,7 +192,7 @@ impl PosixThreadBuilder {
         let fs = fs
             .unwrap_or_else(|| Arc::new(ThreadFsInfo::new(ns_proxy.mnt_ns().new_path_resolver())));
 
-        Arc::new_cyclic(|weak_task| {
+        Ok(Arc::new_cyclic(|weak_task| {
             let posix_thread = {
                 let prof_clock = ProfClock::new();
                 let virtual_timer_manager = TimerManager::new(prof_clock.user_clock().clone());
@@ -206,6 +220,7 @@ impl PosixThreadBuilder {
                     tracees: Once::new(),
                     exit_code: AtomicU32::new(0),
                     personality: AtomicU32::new(0),
+                    lsm_task_states: SpinLock::new(lsm_task_states),
                 }
             };
 
@@ -229,6 +244,6 @@ impl PosixThreadBuilder {
             );
 
             task::create_new_user_task(user_ctx, thread, thread_local)
-        })
+        }))
     }
 }

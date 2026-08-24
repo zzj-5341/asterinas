@@ -53,7 +53,7 @@ mod net;
 mod prelude;
 mod process;
 mod sched;
-mod security;
+pub mod security;
 mod syscall;
 mod thread;
 mod time;
@@ -62,6 +62,11 @@ mod util;
 #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
 mod vdso;
 mod vm;
+
+pub use error::{Errno, Error};
+
+/// The result type used by Asterinas core APIs.
+pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// Boots the Asterinas core kernel.
 pub fn boot() {

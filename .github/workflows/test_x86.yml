@@ -99,6 +99,7 @@ jobs:
         include:
           - { variant: 'handover64-debug', release: false, boot_protocol: 'linux-efi-handover64' }
           - { variant: 'multiboot2-smp4',  boot_protocol: 'multiboot2', smp: 4 }
+          - { variant: 'apparmor-m1', release: false, boot_protocol: 'linux-efi-handover64', cmdline: 'lsm=apparmor,yama loglevel=warn' }
     steps:
       - name: Free disk space
         # Remove unused packages from the host to save disk space.
@@ -111,6 +112,7 @@ jobs:
           release: ${{ !contains(matrix.release, 'false') }}
           smp: ${{ matrix.smp }}
           boot_protocol: ${{ matrix.boot_protocol || 'linux-efi-handover64' }}
+          cmdline: ${{ matrix.cmdline }}
 
   conformance-test:
     runs-on: ubuntu-latest

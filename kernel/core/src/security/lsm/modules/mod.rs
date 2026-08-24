@@ -29,11 +29,13 @@
 //! mandatory modules plus the default optional stack are used.
 
 mod capability;
+#[cfg(ktest)]
+mod test;
 pub(crate) mod yama;
 
-use spin::Once;
+use spin::{Mutex, Once};
 
-use super::{LsmFlags, LsmModule};
+use super::{LsmFlags, LsmModule, RegistrationError};
 use crate::prelude::*;
 
 static LSM_PARAM: Once<String> = Once::new();
@@ -45,27 +47,89 @@ aster_cmdline::define_kv_param!("security", LEGACY_SECURITY_PARAM);
 /// LSM modules that are always enabled before boot-selected modules.
 static MANDATORY_MODULES: [&'static dyn LsmModule; 1] = [&capability::CAPABILITY_LSM];
 
-/// All LSM modules compiled into the kernel.
-static ALL_MODULES: [&'static dyn LsmModule; 2] = [&capability::CAPABILITY_LSM, &yama::YAMA_LSM];
+/// All LSM modules built directly into core.
+static BUILTIN_MODULES: [&'static dyn LsmModule; 2] =
+    [&capability::CAPABILITY_LSM, &yama::YAMA_LSM];
 
 /// The fallback optional LSM stack used when no boot-time selector is specified.
 pub(super) static DEFAULT_OPTIONAL_MODULES: [&'static dyn LsmModule; 1] = [&yama::YAMA_LSM];
 
-static ALL_MODULES_BY_NAME: Once<BTreeMap<&'static str, &'static dyn LsmModule>> = Once::new();
 static ACTIVE_MODULES: Once<Box<[&'static dyn LsmModule]>> = Once::new();
+static EXTENSION_REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
+
+pub(super) fn register(
+    module: &'static dyn LsmModule,
+) -> core::result::Result<(), RegistrationError> {
+    EXTENSION_REGISTRY.lock().register(module)
+}
 
 pub(super) fn active_modules() -> &'static [&'static dyn LsmModule] {
     ACTIVE_MODULES
         .call_once(|| {
-            let modules_by_name = ALL_MODULES_BY_NAME.call_once(|| {
-                ALL_MODULES
-                    .iter()
-                    .map(|module| (module.name(), *module))
-                    .collect()
-            });
-            ModuleSelection::select_from_boot_params(modules_by_name).into_modules()
+            let extensions = EXTENSION_REGISTRY.lock().close();
+            let modules = modules_by_name(&extensions);
+            ModuleSelection::select(
+                LSM_PARAM.get().map(String::as_str),
+                LEGACY_SECURITY_PARAM.get().map(String::as_str),
+                &modules,
+            )
+            .into_modules()
         })
         .as_ref()
+}
+
+fn modules_by_name(
+    extensions: &[&'static dyn LsmModule],
+) -> BTreeMap<&'static str, &'static dyn LsmModule> {
+    BUILTIN_MODULES
+        .iter()
+        .chain(extensions)
+        .map(|module| (module.name(), *module))
+        .collect()
+}
+
+struct Registry {
+    modules: Vec<&'static dyn LsmModule>,
+    closed: bool,
+}
+
+impl Registry {
+    const fn new() -> Self {
+        Self {
+            modules: Vec::new(),
+            closed: false,
+        }
+    }
+
+    fn register(
+        &mut self,
+        module: &'static dyn LsmModule,
+    ) -> core::result::Result<(), RegistrationError> {
+        if self.closed {
+            return Err(RegistrationError::SelectionClosed);
+        }
+        if BUILTIN_MODULES
+            .iter()
+            .chain(&self.modules)
+            .any(|registered| registered.name() == module.name())
+        {
+            return Err(RegistrationError::DuplicateName);
+        }
+
+        self.modules.push(module);
+        Ok(())
+    }
+
+    fn close(&mut self) -> Box<[&'static dyn LsmModule]> {
+        self.closed = true;
+        self.modules.clone().into_boxed_slice()
+    }
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Default)]
@@ -76,7 +140,9 @@ struct ModuleSelection {
 }
 
 impl ModuleSelection {
-    fn select_from_boot_params(
+    fn select(
+        lsm_param: Option<&str>,
+        security_param: Option<&str>,
         modules_by_name: &BTreeMap<&'static str, &'static dyn LsmModule>,
     ) -> Self {
         let mut selection = Self::default();
@@ -84,7 +150,7 @@ impl ModuleSelection {
             selection.push(module);
         }
 
-        match (LSM_PARAM.get(), LEGACY_SECURITY_PARAM.get()) {
+        match (lsm_param, security_param) {
             (Some(lsm_param), security_param) => {
                 if security_param.is_some() {
                     warn!("`security=` is ignored because `lsm=` is specified");
