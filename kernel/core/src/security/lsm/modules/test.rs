@@ -77,7 +77,7 @@ fn module_names(selection: ModuleSelection) -> Vec<&'static str> {
 
 #[ktest]
 fn default_stack_is_capability_then_yama() {
-    let modules = super::modules_by_name(&[]);
+    let modules = super::modules_by_name(&[&APPARMOR]);
     let selection = ModuleSelection::select(None, None, &modules);
 
     assert_eq!(module_names(selection), ["capability", "yama"]);

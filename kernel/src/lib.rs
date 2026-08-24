@@ -6,6 +6,8 @@
 #![no_main]
 #![deny(unsafe_code)]
 
+extern crate aster_apparmor;
+
 #[ostd::main]
 fn main() {
     aster_core::boot();
