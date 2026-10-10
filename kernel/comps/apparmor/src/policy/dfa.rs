@@ -54,7 +54,6 @@ impl TableView<'_> {
     }
 }
 
-#[cfg_attr(not(ktest), expect(dead_code))]
 pub(super) fn validate(encoded: &[u8]) -> Result<()> {
     let tables = parse_table_set(encoded)?;
     let (state_count, transition_count) = verify_table_shapes(&tables)?;

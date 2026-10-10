@@ -170,6 +170,7 @@ padding-struct = { path = "ostd/libs/padding-struct", version = "0.2.0" }
 aster-core = { path = "kernel/core", default-features = false }
 
 # Crates under kernel/comps
+aster-apparmor = { path = "kernel/comps/apparmor" }
 aster-drm = { path = "kernel/comps/drm" }
 aster-i8042 = { path = "kernel/comps/i8042" }
 aster-simpledrm = { path = "kernel/comps/simpledrm" }

@@ -41,11 +41,25 @@ impl ProfileMode {
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    not(ktest),
+    expect(
+        dead_code,
+        reason = "M1 retains attachment matchers but does not execute them"
+    )
+)]
 pub(crate) struct AttachmentMatcher {
     encoded_dfa: Box<[u8]>,
     xmatch_len: u32,
 }
 
+#[cfg_attr(
+    not(ktest),
+    expect(
+        dead_code,
+        reason = "M1 retains attachment matchers but does not execute them"
+    )
+)]
 impl AttachmentMatcher {
     pub(crate) fn encoded_dfa(&self) -> &[u8] {
         &self.encoded_dfa
@@ -60,6 +74,13 @@ impl AttachmentMatcher {
 pub(crate) struct Profile {
     name: String,
     mode: ProfileMode,
+    #[cfg_attr(
+        not(ktest),
+        expect(
+            dead_code,
+            reason = "M1 retains attachment matchers but does not execute them"
+        )
+    )]
     attachment: Option<AttachmentMatcher>,
 }
 
@@ -72,6 +93,13 @@ impl Profile {
         self.mode
     }
 
+    #[cfg_attr(
+        not(ktest),
+        expect(
+            dead_code,
+            reason = "M1 retains attachment matchers but does not execute them"
+        )
+    )]
     pub(crate) fn attachment(&self) -> Option<&AttachmentMatcher> {
         self.attachment.as_ref()
     }
@@ -194,7 +222,6 @@ impl PolicyStore {
     }
 }
 
-#[cfg_attr(not(ktest), expect(dead_code))]
 pub(super) static POLICY_STORE: PolicyStore = PolicyStore::new();
 
 fn capacity_error() -> Error {

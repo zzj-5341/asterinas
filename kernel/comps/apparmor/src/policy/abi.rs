@@ -190,7 +190,6 @@ impl<'a> Cursor<'a> {
     }
 }
 
-#[cfg_attr(not(ktest), expect(dead_code))]
 pub(super) fn decode(blob: &[u8]) -> Result<DecodedPolicy> {
     if blob.is_empty() {
         return Err(Error::new(Errno::EINVAL));

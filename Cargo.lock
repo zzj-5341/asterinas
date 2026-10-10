@@ -81,6 +81,8 @@ name = "aster-apparmor"
 version = "0.1.0"
 dependencies = [
  "aster-core",
+ "aster-util",
+ "component",
  "ostd",
 ]
 
@@ -492,6 +494,7 @@ dependencies = [
 name = "asterinas"
 version = "0.1.0"
 dependencies = [
+ "aster-apparmor",
  "aster-core",
  "aster-drm",
  "aster-i8042",
