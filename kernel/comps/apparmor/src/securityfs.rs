@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! AppArmor's userspace policy loading and query interface.
+//! AppArmor M1 userspace policy loading and query interface.
+//!
+//! A successful `.load` validates and stores profiles but does not activate
+//! policy enforcement. The `profiles` file reports store membership only.
 
 use alloc::vec::Vec;
 
@@ -18,7 +21,7 @@ use ostd::{
     task::Task,
 };
 
-use crate::policy::{MAX_POLICY_BLOB_SIZE, POLICY_STORE};
+use crate::policy;
 
 static FILES: [SecurityFsFile; 2] = [
     SecurityFsFile::write_only(".load", write_load),
@@ -51,7 +54,7 @@ fn write_load(offset: usize, reader: &mut VmReader) -> Result<usize> {
     if len == 0 {
         return Err(Error::new(Errno::EINVAL));
     }
-    if len > MAX_POLICY_BLOB_SIZE {
+    if len > policy::MAX_POLICY_BLOB_SIZE {
         return Err(Error::new(Errno::E2BIG));
     }
 
@@ -66,13 +69,13 @@ fn write_load(offset: usize, reader: &mut VmReader) -> Result<usize> {
         return Err(Error::new(Errno::EFAULT));
     }
 
-    POLICY_STORE.load(&blob)?;
+    policy::POLICY_STORE.load(&blob)?;
     Ok(len)
 }
 
 fn read_profiles(offset: usize, writer: &mut VmWriter) -> Result<usize> {
     check_policy_admin()?;
-    let snapshot = POLICY_STORE.snapshot();
+    let snapshot = policy::POLICY_STORE.snapshot();
     let mut printer = VmPrinter::new_skip(writer, offset);
 
     if let Some(snapshot) = snapshot {

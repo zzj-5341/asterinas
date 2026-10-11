@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! VFS inode adapter for securityfs SysTree nodes.
+//!
+//! [`SecurityFsInode`] delegates file I/O directly to [`SecurityDirectory`]
+//! so callback errno values are preserved instead of being collapsed by the
+//! generic SysTree attribute-error mapping.
+
 use super::{fs::SecurityFs, node::SecurityDirectory};
 use crate::{
     fs::{

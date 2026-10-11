@@ -155,16 +155,25 @@ static void become_nobody_with_only_mac_admin(void)
 	CHECK_WITH(data[1].effective, _ret == mask);
 }
 
-static size_t find_dfa_magic(const unsigned char *data, size_t len)
+static size_t find_bytes(const unsigned char *data, size_t len,
+			 const unsigned char *needle, size_t needle_len)
 {
-	static const unsigned char magic[] = { 0x1b, 0x5e, 0x78, 0x3d };
-
-	for (size_t offset = 0; offset + sizeof(magic) <= len; offset++) {
-		if (memcmp(data + offset, magic, sizeof(magic)) == 0) {
+	if (needle_len > len) {
+		return SIZE_MAX;
+	}
+	for (size_t offset = 0; offset <= len - needle_len; offset++) {
+		if (memcmp(data + offset, needle, needle_len) == 0) {
 			return offset;
 		}
 	}
 	return SIZE_MAX;
+}
+
+static size_t find_dfa_magic(const unsigned char *data, size_t len)
+{
+	static const unsigned char magic[] = { 0x1b, 0x5e, 0x78, 0x3d };
+
+	return find_bytes(data, len, magic, sizeof(magic));
 }
 
 #define TEST_PROFILES(expected)                                            \
@@ -205,6 +214,7 @@ FN_TEST(policy_load_and_query_interface)
 		 (statbuf.st_mode & 0777) == 0444);
 	TEST_ERRNO(stat(APPARMOR_DIR "/.replace", &statbuf), ENOENT);
 	TEST_ERRNO(stat(APPARMOR_DIR "/.remove", &statbuf), ENOENT);
+	TEST_ERRNO(stat(APPARMOR_DIR "/features", &statbuf), ENOENT);
 	TEST_PROFILES("");
 	TEST_ERRNO(load_data("", 0), EINVAL);
 
@@ -278,6 +288,22 @@ FN_TEST(policy_load_and_query_interface)
 	TEST_ERRNO(load_data(demo.data, demo.len), EEXIST);
 	TEST_PROFILES(final_profiles);
 	TEST_ERRNO(load_data(multi.data, multi.len), EEXIST);
+	TEST_PROFILES(final_profiles);
+
+	unsigned char *partial_conflict =
+		TEST_RES(malloc(multi.len), _ret != NULL);
+	memcpy(partial_conflict, multi.data, multi.len);
+	static const unsigned char old_name[] = "demo2";
+	static const unsigned char new_name[] = "fresh";
+	size_t name_offset = find_bytes(partial_conflict, multi.len, old_name,
+					sizeof(old_name) - 1);
+	TEST_RES(name_offset, _ret != SIZE_MAX);
+	if (name_offset != SIZE_MAX) {
+		memcpy(partial_conflict + name_offset, new_name,
+		       sizeof(new_name) - 1);
+		TEST_ERRNO(load_data(partial_conflict, multi.len), EEXIST);
+	}
+	free(partial_conflict);
 	TEST_PROFILES(final_profiles);
 
 	unsigned char *duplicate = TEST_RES(malloc(demo.len * 2), _ret != NULL);

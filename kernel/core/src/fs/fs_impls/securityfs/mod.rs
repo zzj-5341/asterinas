@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! securityfs filesystem implementation.
+//!
+//! This module connects the public securityfs registration seam to an
+//! immutable [`aster_systree`] hierarchy and the VFS inode adapter.
+
 mod fs;
 mod inode;
 mod node;

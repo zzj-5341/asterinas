@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! securityfs filesystem type and singleton mount instance.
+//!
+//! [`SecurityFs`] owns the superblock and exposes the root node created by the
+//! neighboring `node` module through the VFS.
+
 use aster_systree::SysNode;
 use spin::Once;
 

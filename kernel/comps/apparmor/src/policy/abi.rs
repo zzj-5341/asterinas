@@ -128,6 +128,11 @@ impl<'a> Cursor<'a> {
             return Err(protocol_error());
         }
 
+        // The parser serializes each profile in its own buffer before concatenation,
+        // so later profile units may not start at a globally aligned offset. Recover
+        // the parser-local padding from `data_end`, matching Linux
+        // `security/apparmor/policy_unpack.c::unpack_dfa`; aligning `data_start`
+        // directly would reject valid multi-profile streams.
         let rem = data_end & 7;
         let size_before_pad = data_start.checked_sub(rem).ok_or_else(protocol_error)?;
         let pad = (8 - (size_before_pad & 7)) & 7;
@@ -230,6 +235,9 @@ fn decode_profile(cursor: &mut Cursor<'_>) -> Result<Profile> {
     let name = validate_profile_name(cursor.string()?)?;
     let attachment = decode_attachment(cursor)?;
     let mode = decode_flags(cursor)?;
+    if cursor.peek_name()? == Some(b"path_flags") {
+        return Err(unsupported_error());
+    }
     decode_zero_capabilities(cursor)?;
     decode_zero_caps64(cursor)?;
     if cursor.peek_name()?.is_some() {
@@ -349,6 +357,7 @@ mod tests {
         attachment: Option<(&'a [u8], u32)>,
         namespace: bool,
         before_flags: Option<&'a str>,
+        path_flags: Option<u32>,
         before_end: Option<&'a str>,
     }
 
@@ -364,6 +373,7 @@ mod tests {
                 attachment: None,
                 namespace: false,
                 before_flags: None,
+                path_flags: None,
                 before_end: None,
             }
         }
@@ -461,6 +471,9 @@ mod tests {
         push_u32(&mut output, options.mode);
         push_u32(&mut output, options.audit);
         output.push(8);
+        if let Some(path_flags) = options.path_flags {
+            push_named_u32(&mut output, "path_flags", path_flags);
+        }
         for value in options.low_caps {
             push_u32(&mut output, value);
         }
@@ -616,6 +629,10 @@ mod tests {
                 ..Default::default()
             },
             UnitOptions {
+                path_flags: Some(1),
+                ..Default::default()
+            },
+            UnitOptions {
                 before_end: Some("policydb"),
                 ..Default::default()
             },
@@ -626,6 +643,10 @@ mod tests {
 
     #[ktest]
     fn validates_profile_names() {
+        let max_name = vec![b'a'; 255];
+        let decoded = decode(&policy_unit(&max_name, &UnitOptions::default())).unwrap();
+        assert_eq!(decoded.profiles[0].name().as_bytes(), max_name.as_slice());
+
         assert_errno(
             decode(&policy_unit(&[0xff], &UnitOptions::default())),
             Errno::EILSEQ,
@@ -644,6 +665,17 @@ mod tests {
             decode(&policy_unit(&vec![b'a'; 256], &UnitOptions::default())),
             Errno::EINVAL,
         );
+    }
+
+    #[ktest]
+    fn rejects_more_than_the_per_write_profile_limit() {
+        let unit = policy_unit(b"same", &UnitOptions::default());
+        let mut stream = Vec::new();
+        for _ in 0..=super::MAX_LOADED_PROFILES {
+            stream.extend_from_slice(&unit);
+        }
+
+        assert_errno(decode(&stream), Errno::ENOSPC);
     }
 
     #[ktest]

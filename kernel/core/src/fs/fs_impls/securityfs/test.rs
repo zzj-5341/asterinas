@@ -5,7 +5,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use aster_systree::SysObj;
 use ostd::prelude::ktest;
 
-use super::{fs::SecurityFs, node::SecurityRootNode};
+use super::{
+    fs::SecurityFs,
+    node::{SecurityDirectory, SecurityRootNode},
+};
 use crate::{
     fs::{
         file::{InodeType, StatusFlags, mkmod},
@@ -149,6 +152,24 @@ fn invalid_names_empty_files_and_duplicates_are_rejected() {
     assert_errno(
         register_directory("ktest-duplicate-directory", &MODE_FILES),
         Errno::EEXIST,
+    );
+}
+
+#[ktest]
+fn missing_callback_file_returns_enoent() {
+    let directory = SecurityDirectory::new("ktest-missing-file", &MODE_FILES).unwrap();
+
+    let mut bytes = [];
+    let mut writer = VmWriter::from(&mut bytes[..]).to_fallible();
+    assert_errno(
+        directory.read_file_at("missing", 0, &mut writer),
+        Errno::ENOENT,
+    );
+
+    let mut reader = VmReader::from(&[][..]).to_fallible();
+    assert_errno(
+        directory.write_file_at("missing", 0, &mut reader),
+        Errno::ENOENT,
     );
 }
 

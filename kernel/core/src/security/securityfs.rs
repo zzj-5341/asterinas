@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! Registration interface for immutable top-level securityfs directories.
+//!
+//! [`SecurityFsFile`] describes one read-only or write-only file backed by an
+//! operation callback. The VFS offset is passed through unchanged, callbacks
+//! return the number of bytes transferred, and callback errors retain their
+//! original errno. This seam has no per-open authorization hook; consumers
+//! that require authorization must check it inside every I/O callback.
+
 use aster_systree::SysPerms;
 
 use crate::prelude::*;

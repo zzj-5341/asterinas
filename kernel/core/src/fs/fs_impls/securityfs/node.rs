@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! Immutable securityfs directory and file-node model.
+//!
+//! [`SecurityRootNode`] contains top-level [`SecurityDirectory`] instances.
+//! Each directory maps the static file declarations from the public securityfs
+//! seam into SysTree attributes consumed by the inode adapter.
+
 use aster_systree::{
     BranchNodeFields, Error as SysTreeError, NormalNodeFields, Result as SysTreeResult, SysAttrSet,
     SysAttrSetBuilder, SysBranchNode, SysObj, SysPerms, SysStr, inherit_sys_branch_node,
@@ -94,7 +100,7 @@ impl SecurityDirectory {
         writer: &mut VmWriter,
     ) -> Result<usize> {
         self.file(name)
-            .ok_or_else(|| Error::new(Errno::EIO))?
+            .ok_or_else(|| Error::new(Errno::ENOENT))?
             .read_at(offset, writer)
     }
 
@@ -105,7 +111,7 @@ impl SecurityDirectory {
         reader: &mut VmReader,
     ) -> Result<usize> {
         self.file(name)
-            .ok_or_else(|| Error::new(Errno::EIO))?
+            .ok_or_else(|| Error::new(Errno::ENOENT))?
             .write_at(offset, reader)
     }
 }

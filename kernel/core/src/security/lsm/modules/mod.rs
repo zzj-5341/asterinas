@@ -95,7 +95,7 @@ impl ModuleRegistry {
     }
 
     fn seal(&mut self) -> Vec<&'static dyn LsmModule> {
-        assert!(!self.sealed, "the LSM registry was sealed twice");
+        debug_assert!(!self.sealed, "the LSM registry was sealed twice");
         self.sealed = true;
         core::mem::take(&mut self.modules)
     }
@@ -110,7 +110,7 @@ fn build_modules_by_name(
 ) -> BTreeMap<&'static str, &'static dyn LsmModule> {
     let mut modules_by_name = BTreeMap::new();
     for module in ALL_BUILTIN_MODULES.iter().copied().chain(extensions) {
-        assert!(
+        debug_assert!(
             modules_by_name.insert(module.name(), module).is_none(),
             "duplicate LSM module name"
         );

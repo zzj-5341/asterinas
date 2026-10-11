@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! AppArmor support for Asterinas.
+//! AppArmor M1 policy control plane.
+//!
+//! This component decodes, validates, and stores AppArmor ABI v5 profiles.
+//! It does not attach labels to tasks or enforce policy. Profiles exposed
+//! through securityfs have only been accepted into the in-kernel store.
 
 #![no_std]
 #![deny(unsafe_code)]

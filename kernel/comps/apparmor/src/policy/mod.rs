@@ -352,6 +352,21 @@ mod tests {
     }
 
     #[ktest]
+    fn partial_conflict_does_not_publish_new_profile() {
+        let store = PolicyStore::new();
+        store.load(&policy_unit("existing")).unwrap();
+        let before = store.snapshot().unwrap();
+
+        let mut batch = policy_unit("existing");
+        batch.extend_from_slice(&policy_unit("new"));
+        assert_errno(store.load(&batch), Errno::EEXIST);
+
+        let after = store.snapshot().unwrap();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_names(&after, &["existing"]);
+    }
+
+    #[ktest]
     fn rejects_input_profile_and_charge_limits() {
         let store = PolicyStore::new();
         assert!(store.snapshot().is_none());
