@@ -231,12 +231,14 @@ FN_TEST(policy_load_and_query_interface)
 	struct fixture observe = read_fixture("observe.bin");
 	struct fixture multi = read_fixture("multi.bin");
 	struct fixture multi_attach = read_fixture("multi-attach.bin");
+	struct fixture path_flags = read_fixture("path-flags.bin");
 	struct fixture namespaced = read_fixture("namespaced.bin");
 	struct fixture v7 = read_fixture("v7-empty.bin");
 	TEST_RES(demo.len, _ret == 1484);
 	TEST_RES(observe.len, _ret == 118);
 	TEST_RES(multi.len, _ret == 232);
 	TEST_RES(multi_attach.len, _ret == 3016);
+	TEST_RES(path_flags.len, _ret == 140);
 	TEST_RES(namespaced.len, _ret == 139);
 	TEST_RES(v7.len, _ret == 1322);
 
@@ -343,6 +345,8 @@ FN_TEST(policy_load_and_query_interface)
 	free(corrupt);
 	TEST_PROFILES(final_profiles);
 
+	TEST_ERRNO(load_data(path_flags.data, path_flags.len), EOPNOTSUPP);
+	TEST_PROFILES(final_profiles);
 	TEST_ERRNO(load_data(namespaced.data, namespaced.len), EOPNOTSUPP);
 	TEST_PROFILES(final_profiles);
 	TEST_ERRNO(load_data(v7.data, v7.len), EPROTONOSUPPORT);
@@ -364,6 +368,7 @@ FN_TEST(policy_load_and_query_interface)
 
 	free(v7.data);
 	free(namespaced.data);
+	free(path_flags.data);
 	free(multi_attach.data);
 	free(multi.data);
 	free(observe.data);

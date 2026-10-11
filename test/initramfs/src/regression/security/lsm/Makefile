@@ -3,7 +3,7 @@
 include ../../common/Makefile
 
 APPARMOR_FIXTURES := demo.bin observe.bin multi.bin multi-attach.bin \
-	namespaced.bin v7-empty.bin
+	path-flags.bin namespaced.bin v7-empty.bin
 APPARMOR_FIXTURE_OUTPUT_DIR := $(OBJ_OUTPUT_DIR)/apparmor-fixtures
 
 all: $(addprefix $(APPARMOR_FIXTURE_OUTPUT_DIR)/,$(APPARMOR_FIXTURES))

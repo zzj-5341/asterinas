@@ -668,12 +668,18 @@ mod tests {
     }
 
     #[ktest]
-    fn rejects_more_than_the_per_write_profile_limit() {
+    fn enforces_the_per_write_profile_limit() {
         let unit = policy_unit(b"same", &UnitOptions::default());
         let mut stream = Vec::new();
-        for _ in 0..=super::MAX_LOADED_PROFILES {
+        for _ in 0..super::MAX_LOADED_PROFILES {
             stream.extend_from_slice(&unit);
         }
+
+        assert_eq!(
+            decode(&stream).unwrap().profiles.len(),
+            super::MAX_LOADED_PROFILES
+        );
+        stream.extend_from_slice(&unit);
 
         assert_errno(decode(&stream), Errno::ENOSPC);
     }
