@@ -18,6 +18,7 @@
 #define APPARMOR_DIR "/sys/kernel/security/apparmor"
 #define LOAD_PATH APPARMOR_DIR "/.load"
 #define PROFILES_PATH APPARMOR_DIR "/profiles"
+#define VERSION_PATH APPARMOR_DIR "/features/policy/versions/v5"
 #define FIXTURE_DIR "/test/security/lsm/apparmor-fixtures/"
 #define MAX_POLICY_BLOB_SIZE (1024 * 1024)
 #define MULTI_ATTACH_SECOND_BLOB_DATA_START 1559
@@ -214,7 +215,13 @@ FN_TEST(policy_load_and_query_interface)
 		 (statbuf.st_mode & 0777) == 0444);
 	TEST_ERRNO(stat(APPARMOR_DIR "/.replace", &statbuf), ENOENT);
 	TEST_ERRNO(stat(APPARMOR_DIR "/.remove", &statbuf), ENOENT);
-	TEST_ERRNO(stat(APPARMOR_DIR "/features", &statbuf), ENOENT);
+	TEST_RES(stat(VERSION_PATH, &statbuf),
+		 (statbuf.st_mode & 0777) == 0444);
+	int version_fd = TEST_SUCC(open(VERSION_PATH, O_RDONLY));
+	char version[5] = {};
+	TEST_RES(read(version_fd, version, sizeof(version) - 1),
+		 _ret == 4 && strcmp(version, "yes\n") == 0);
+	TEST_SUCC(close(version_fd));
 	TEST_PROFILES("");
 	TEST_ERRNO(load_data("", 0), EINVAL);
 
