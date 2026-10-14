@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Registration interface for immutable top-level securityfs directories.
+//! Registration interface for immutable securityfs hierarchies.
 //!
 //! [`SecurityFsFile`] describes one read-only or write-only file backed by an
 //! operation callback. The VFS offset is passed through unchanged, callbacks
@@ -69,7 +69,46 @@ impl SecurityFsFile {
     }
 }
 
+/// An immutable securityfs directory declaration.
+#[derive(Clone, Copy, Debug)]
+pub struct SecurityFsDirectory {
+    name: &'static str,
+    files: &'static [SecurityFsFile],
+    directories: &'static [SecurityFsDirectory],
+}
+
+impl SecurityFsDirectory {
+    pub const fn new(
+        name: &'static str,
+        files: &'static [SecurityFsFile],
+        directories: &'static [SecurityFsDirectory],
+    ) -> Self {
+        Self {
+            name,
+            files,
+            directories,
+        }
+    }
+
+    pub(crate) const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) const fn files(&self) -> &'static [SecurityFsFile] {
+        self.files
+    }
+
+    pub(crate) const fn directories(&self) -> &'static [SecurityFsDirectory] {
+        self.directories
+    }
+}
+
 /// Registers an immutable top-level directory and its files in securityfs.
 pub fn register_directory(name: &'static str, files: &'static [SecurityFsFile]) -> Result<()> {
-    crate::fs::securityfs::register_directory(name, files)
+    crate::fs::securityfs::register_directory(&SecurityFsDirectory::new(name, files, &[]))
+}
+
+/// Registers an immutable directory hierarchy in securityfs.
+pub fn register_hierarchy(directory: &'static SecurityFsDirectory) -> Result<()> {
+    crate::fs::securityfs::register_directory(directory)
 }
