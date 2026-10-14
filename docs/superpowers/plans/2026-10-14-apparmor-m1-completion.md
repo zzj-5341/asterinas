@@ -183,3 +183,21 @@ Rollback is commit-granular. The original eight-commit implementation remains re
 - [x] Task 7 — passed formatting, compile/ktest, default/AppArmor regression, NixOS build/run, whitespace and scope gates.
 
 The final implementation head before the documentation-only commit is `ef3c27d`. Exact commands, results and the note about ineffective standalone crate `cargo osdk test` attempts are recorded in `../reports/2026-10-15-apparmor-m1-completion-report.md`.
+
+## 9. Final-review follow-up (2026-10-15)
+
+This follow-up is limited to the non-blocking findings from the accepted M1 review:
+
+1. Add an explicit ktest assertion that every declared securityfs directory is mode `0555`.
+2. Document that multi-profile atomicity is guaranteed per direct `.load` write; the current parser path may split one buffer into multiple writes because `policy/set_load` is not advertised.
+3. Record full Linux DFA semantic validation as the first M2 gate before any matcher is executed.
+4. Record that the AppArmor overlay affects every Asterinas NixOS configuration using the shared template.
+5. Re-run the focused ktest/compile checks and whitespace audit, then update the completion report with the exact result.
+
+Adding `policy/set_load`, changing parser behavior, or introducing repository-wide line-ending policy is outside this follow-up because each would expand M1 behavior rather than close an acceptance gap.
+
+Execution record:
+
+- [x] Directory mode assertions added for the top-level declaration and every nested level.
+- [x] Parser atomicity boundary, M2 DFA gate, and global overlay scope documented.
+- [x] `cargo osdk check --ktests` for `aster-core`, repository-level `make ktest`, `cargo fmt --all -- --check`, and `git diff --check` passed in the Linux development container.

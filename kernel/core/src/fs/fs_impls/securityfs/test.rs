@@ -267,8 +267,10 @@ fn nested_directories_expose_callback_files() {
     register_hierarchy(&NESTED_DIRECTORY).unwrap();
 
     let mut inode = root_dentry().inode().lookup("ktest-nested").unwrap();
+    assert_eq!(inode.mode().unwrap(), mkmod!(a+rx));
     for directory in ["features", "policy", "versions"] {
         inode = inode.lookup(directory).unwrap();
+        assert_eq!(inode.mode().unwrap(), mkmod!(a+rx));
     }
     let version = inode.lookup("v5").unwrap();
     assert_eq!(version.mode().unwrap(), mkmod!(a+r));

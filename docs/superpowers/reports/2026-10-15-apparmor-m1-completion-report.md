@@ -62,6 +62,8 @@ AppArmor 被 `lsm=apparmor,yama` 选中后一次注册 `.load`、`profiles` 与 
 sha256-Kuc5Nrz4iq5MC5AOcJL9Sb54DWNKlEk3b3DW0vpgSZg=
 ```
 
+该 overlay 由共享 Asterinas NixOS 模板接入，因此影响所有使用此模板的配置，而不只影响 AppArmor 测试套件：这些配置都会同时获得 5.0.2 的 `libapparmor` 和 `apparmor-parser`。
+
 ### 3.5 文本端到端测试
 
 `test/nixos/tests/security-apparmor` 在客体内执行：
@@ -80,6 +82,8 @@ profile observe flags=(complain) {
 ```
 
 测试同时固定 SHA-256 `912a45cf505271eee29e01e01d6d41abbe32ee540f94a10886746c5874400c16`，并断言第二次加载报告 `File exists`、原 store 不变。测试不使用已提交的 `.bin` 作为加载输入。
+
+原子性承诺以单次 `.load` write 为边界：直接用一个 `write(2)` 提交 multi-profile blob 时，内核整批发布或整批拒绝。当前 feature tree 没有 `policy/set_load`，libapparmor 5.0.2 会把含多个 profile 的 buffer 拆成多次 write，所以 `apparmor_parser` 路径不具备跨 write 的整批原子性；本轮文本端到端测试只承诺单 profile。
 
 ## 4. 源码审核入口
 
@@ -148,8 +152,22 @@ ef3c27d Test AppArmor text profile loading on Asterinas NixOS
 - M1 没有 enforcement。任何“已加载 profile 已保护进程”的演示或文案都是错误的。
 - 只接受 ABI v5 冻结子集；capability/file/network 等规则仍返回 `EOPNOTSUPP`。
 - attachment DFA 只校验和保存，不执行。
+- M2 执行 matcher 前的第一道门禁是补齐 Linux `verify_dfa` 的 accept flags、DIFF chain 成环、OOB 语义，以及 `xmatch_len` 与 DFA 的一致性校验。
 - 没有 namespace、`aa_ns`、task label、`.replace`、`.remove` 或持久化。
 - parser 包第一次构建需要运行较长的上游测试；Nix store 缓存后不会重复承担同等成本。
 - 当前 feature tree 只声明 v5。扩展任何 feature 前必须先让 decoder/enforcement 真实支持对应编码。
 
 这些限制是 M1 边界，不是本轮遗漏。下一里程碑应从 task label 与 exec 绑定开始，而不是继续扩大 loader ABI。
+
+## 9. 终审意见收尾
+
+终审通过后补充了 securityfs 每级目录 mode 为 `0555` 的显式 ktest 断言，并完成本报告中的 parser 原子性边界、M2 DFA 门禁和 overlay 全局影响说明。
+
+2026-10-15 在开发服务器的 Linux 容器内重新验证：
+
+- `kernel/core` 的 `cargo osdk check --ktests`：通过，exit 0；
+- 仓库级 `make ktest`：KVM runner 实际执行，exit 0；
+- `cargo fmt --all -- --check`：通过，exit 0；
+- `git diff --check`：通过，exit 0。
+
+本次没有修改生产内核逻辑、parser/overlay 或用户态测试，因此没有重复运行两个 QEMU regression 和 NixOS e2e；其最近一次完整通过结果仍见 §6。

@@ -1134,6 +1134,8 @@ AppArmor 被选中时，parser 会从运行时 feature tree 自动选择 ABI v5�
 apparmor_parser --add ./demo.profile
 ```
 
+原子性边界是一次 `.load` write：用户态用单次 `write(2)` 提交包含多个 profile 的 blob 时，内核整批发布或整批拒绝。当前 feature tree 不发布 `policy/set_load`，因此 libapparmor 5.0.2 会把含多个 profile 的 buffer 拆成多次 `.load` write；`apparmor_parser` 命令路径不承诺跨这些 write 的整批原子性。M1 的文本端到端承诺仅覆盖单 profile，未来只有在实现并发布 `policy/set_load` 对应语义后才能扩大该承诺。
+
 回归测试不在 initramfs 安装 parser，而是对 `.load` 执行一次完整 `write(2)` 写入预编译 fixture。不要用可能拆成多次 write 的通用复制循环。
 
 ### 11.3 查询
@@ -1169,6 +1171,7 @@ cat /sys/kernel/security/apparmor/profiles
 - 静态声明与属性表意外不一致时，缺失 callback 文件返回 `ENOENT`，不返回 `EIO`。
 - root node 的 `is_root()` 为 true，`init_parent()` 后仍无 parent。
 - 用户态不能 create/unlink securityfs 条目。
+- 静态声明的每一级目录 mode 都是 `0555`。
 - `features/policy/versions/v5` 可递归 lookup，完整读取为 `yes\n`，offset 1 为 `es\n`，EOF 返回 0。
 - 重复子目录名或同层文件/目录重名返回 `EEXIST`。
 
@@ -1315,7 +1318,7 @@ Linux 的 `aa_ns` 同时承担：可见 profile 集合、父子 namespace、unco
 - 运行时 feature tree 只提供 `/features/policy/versions/v5`；其余能力保持缺失，避免 parser 生成 M1 尚不接受的规则编码。
 - 只接受 ABI v5；v6/v7 的 policydb 留到实际需要规则编码时再增加。
 - attachment DFA 只接受冻结 fixture 覆盖的 `flags == 0`、无 EC、无 OOB/DIFF、16-bit 状态表编码；扩展接受面必须先增加相应的真实 golden fixture。
-- attachment matcher 只被验证和保存，不执行；M2 开始匹配前必须先定义 exact-path 语义和可执行 DFA 表示。
+- attachment matcher 只被验证和保存，不执行；M2 开始匹配前必须先定义 exact-path 语义和可执行 DFA 表示，并补齐 Linux `verify_dfa` 的 accept flags、DIFF chain 成环、OOB 语义以及 `xmatch_len` 与 DFA 的一致性校验。
 - capability/file 等规则仍被拒绝；M1 的 profile 只是 name、mode 和可选 attachment metadata。
 - 不保存原始 policy blob，也不支持导出。
 - 不承诺加载顺序，查询固定按 profile name 排序。
