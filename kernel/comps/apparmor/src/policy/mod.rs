@@ -2,7 +2,7 @@
 
 //! Decoding and validation of AppArmor policies.
 
-use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::cmp::Ordering;
 
 use aster_core::prelude::*;
@@ -40,33 +40,16 @@ impl ProfileMode {
     }
 }
 
-#[cfg_attr(
-    not(ktest),
-    expect(
-        dead_code,
-        reason = "M1 retains attachment matchers but does not execute them"
-    )
-)]
+/// A validated exact attachment.
+/// The serialized DFA is discarded after proof.
 #[derive(Debug)]
 pub(crate) struct AttachmentMatcher {
-    encoded_dfa: Box<[u8]>,
-    xmatch_len: u32,
+    literal: String,
 }
 
-#[cfg_attr(
-    not(ktest),
-    expect(
-        dead_code,
-        reason = "M1 retains attachment matchers but does not execute them"
-    )
-)]
 impl AttachmentMatcher {
-    pub(crate) fn encoded_dfa(&self) -> &[u8] {
-        &self.encoded_dfa
-    }
-
-    pub(crate) fn xmatch_len(&self) -> u32 {
-        self.xmatch_len
+    pub(crate) fn literal_path(&self) -> &str {
+        &self.literal
     }
 }
 
@@ -74,13 +57,6 @@ impl AttachmentMatcher {
 pub(crate) struct Profile {
     name: String,
     mode: ProfileMode,
-    #[cfg_attr(
-        not(ktest),
-        expect(
-            dead_code,
-            reason = "M1 retains attachment matchers but does not execute them"
-        )
-    )]
     attachment: Option<AttachmentMatcher>,
 }
 
@@ -88,18 +64,9 @@ impl Profile {
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
-
     pub(crate) fn mode(&self) -> ProfileMode {
         self.mode
     }
-
-    #[cfg_attr(
-        not(ktest),
-        expect(
-            dead_code,
-            reason = "M1 retains attachment matchers but does not execute them"
-        )
-    )]
     pub(crate) fn attachment(&self) -> Option<&AttachmentMatcher> {
         self.attachment.as_ref()
     }
@@ -115,6 +82,7 @@ struct DecodedPolicy {
 pub(crate) struct PolicySet {
     profiles: Vec<Arc<Profile>>,
     charged_bytes: usize,
+    attachments: Vec<Arc<Profile>>,
 }
 
 impl PolicySet {
@@ -122,13 +90,11 @@ impl PolicySet {
         let current_len = current.map_or(0, |set| set.profiles.len());
         let total_len = current_len
             .checked_add(decoded.profiles.len())
-            .filter(|total| *total <= MAX_LOADED_PROFILES)
             .ok_or_else(capacity_error)?;
 
         let current_charge = current.map_or(0, |set| set.charged_bytes);
         let charged_bytes = current_charge
             .checked_add(decoded.charge)
-            .filter(|total| *total <= MAX_POLICY_STORE_BYTES)
             .ok_or_else(capacity_error)?;
 
         decoded
@@ -183,10 +149,44 @@ impl PolicySet {
             }
         }
 
+        let mut attachments = Vec::new();
+        attachments
+            .try_reserve_exact(total_len)
+            .map_err(|_| Error::new(Errno::ENOMEM))?;
+        attachments.extend(
+            profiles
+                .iter()
+                .filter(|profile| profile.attachment().is_some())
+                .cloned(),
+        );
+        attachments.sort_unstable_by(|left, right| {
+            left.attachment()
+                .unwrap()
+                .literal_path()
+                .cmp(right.attachment().unwrap().literal_path())
+        });
+        if attachments.windows(2).any(|pair| {
+            pair[0].attachment().unwrap().literal_path()
+                == pair[1].attachment().unwrap().literal_path()
+        }) {
+            return Err(Error::new(Errno::EEXIST));
+        }
+        if total_len > MAX_LOADED_PROFILES || charged_bytes > MAX_POLICY_STORE_BYTES {
+            return Err(capacity_error());
+        }
         Ok(Self {
             profiles,
             charged_bytes,
+            attachments,
         })
+    }
+
+    pub(crate) fn find_attachment(&self, path: &str) -> Option<Arc<Profile>> {
+        let index = self
+            .attachments
+            .binary_search_by(|profile| profile.attachment().unwrap().literal_path().cmp(path))
+            .ok()?;
+        Some(self.attachments[index].clone())
     }
 
     pub(crate) fn profiles(&self) -> &[Arc<Profile>] {
@@ -199,7 +199,7 @@ pub(crate) struct PolicyStore {
 }
 
 impl PolicyStore {
-    const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             current: Mutex::new(None),
         }
@@ -333,6 +333,37 @@ mod tests {
     }
 
     #[ktest]
+    fn duplicate_attachment_is_atomic_even_for_distinct_names() {
+        let demo = include_bytes!(
+            "../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/demo.bin"
+        );
+        let store = PolicyStore::new();
+        store.load(demo).unwrap();
+        let before = store.snapshot().unwrap();
+        let mut alias = demo.to_vec();
+        let name = alias.windows(5).position(|s| s == b"demo\0").unwrap();
+        alias[name..name + 4].copy_from_slice(b"copy");
+        assert_errno(store.load(&alias), Errno::EEXIST);
+        assert!(Arc::ptr_eq(&before, &store.snapshot().unwrap()));
+        let empty = PolicyStore::new();
+        alias.extend_from_slice(demo);
+        assert_errno(empty.load(&alias), Errno::EEXIST);
+        assert!(empty.snapshot().is_none());
+    }
+
+    #[ktest]
+    fn unsupported_language_does_not_publish_a_partial_batch() {
+        let store = PolicyStore::new();
+        let mut batch = include_bytes!(
+            "../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/labels.bin"
+        )
+        .to_vec();
+        batch.extend_from_slice(include_bytes!("../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/wildcard.bin"));
+        assert_errno(store.load(&batch), Errno::EOPNOTSUPP);
+        assert!(store.snapshot().is_none());
+    }
+
+    #[ktest]
     fn duplicate_or_decoder_failure_preserves_snapshot() {
         let store = PolicyStore::new();
         assert!(store.snapshot().is_none());
@@ -404,6 +435,36 @@ mod tests {
             ),
             Errno::ENOSPC,
         );
+    }
+
+    #[ktest]
+    fn attachment_charge_limit_preserves_the_previous_snapshot() {
+        let demo = include_bytes!(
+            "../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/demo.bin"
+        );
+        // The frozen parser fixture adds one literal and one attachment index slot.
+        let expected_charge = demo.len() + "/usr/bin/demo".len() + size_of::<Arc<Profile>>();
+        for excess in [0, 1] {
+            let mut current =
+                PolicySet::try_insert_all(None, abi::decode(&policy_unit("existing")).unwrap())
+                    .unwrap();
+            // Seed a nearly full store without decoding 16 MiB of unrelated policies.
+            current.charged_bytes = MAX_POLICY_STORE_BYTES - expected_charge + excess;
+            let store = PolicyStore {
+                current: Mutex::new(Some(Arc::new(current))),
+            };
+            let before = store.snapshot().unwrap();
+            if excess == 0 {
+                store.load(demo).unwrap();
+                let after = store.snapshot().unwrap();
+                assert_names(&after, &["demo", "existing"]);
+                assert_eq!(after.charged_bytes, MAX_POLICY_STORE_BYTES);
+            } else {
+                assert_errno(store.load(demo), Errno::ENOSPC);
+                assert!(Arc::ptr_eq(&before, &store.snapshot().unwrap()));
+                assert_names(&before, &["existing"]);
+            }
+        }
     }
 
     #[ktest]
