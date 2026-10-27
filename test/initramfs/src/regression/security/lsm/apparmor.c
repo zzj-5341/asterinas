@@ -274,6 +274,11 @@ FN_TEST(policy_load_and_query_interface)
 	TEST_RES(read(version_fd, version, sizeof(version) - 1),
 		 _ret == 4 && strcmp(version, "yes\n") == 0);
 	TEST_SUCC(close(version_fd));
+	int set_load_fd = TEST_SUCC(
+		open(APPARMOR_DIR "/features/policy/set_load", O_RDONLY));
+	TEST_RES(read(set_load_fd, version, sizeof(version) - 1),
+		 _ret == 4 && strcmp(version, "yes\n") == 0);
+	TEST_SUCC(close(set_load_fd));
 	TEST_PROFILES("");
 	TEST_ERRNO(load_data("", 0), EINVAL);
 

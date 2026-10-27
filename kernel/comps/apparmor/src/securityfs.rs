@@ -27,12 +27,15 @@ static FILES: [SecurityFsFile; 2] = [
     SecurityFsFile::write_only(".load", write_load),
     SecurityFsFile::read_only("profiles", read_profiles),
 ];
-static VERSION_FILES: [SecurityFsFile; 1] = [SecurityFsFile::read_only("v5", read_v5_support)];
+static VERSION_FILES: [SecurityFsFile; 1] = [SecurityFsFile::read_only("v5", read_yes)];
+// libapparmor otherwise splits a multi-profile buffer into separate writes on
+// one .load descriptor. The decoder/store already publish whole writes atomically.
+static POLICY_FILES: [SecurityFsFile; 1] = [SecurityFsFile::read_only("set_load", read_yes)];
 static VERSION_DIRECTORIES: [SecurityFsDirectory; 1] =
     [SecurityFsDirectory::new("versions", &VERSION_FILES, &[])];
 static POLICY_DIRECTORIES: [SecurityFsDirectory; 1] = [SecurityFsDirectory::new(
     "policy",
-    &[],
+    &POLICY_FILES,
     &VERSION_DIRECTORIES,
 )];
 static FEATURE_DIRECTORIES: [SecurityFsDirectory; 1] = [SecurityFsDirectory::new(
@@ -47,7 +50,7 @@ pub(super) fn register() -> Result<()> {
     aster_core::security::securityfs::register_hierarchy(&APPARMOR_DIRECTORY)
 }
 
-fn read_v5_support(offset: usize, writer: &mut VmWriter) -> Result<usize> {
+fn read_yes(offset: usize, writer: &mut VmWriter) -> Result<usize> {
     let mut printer = VmPrinter::new_skip(writer, offset);
     printer
         .write_fmt(format_args!("yes\n"))
