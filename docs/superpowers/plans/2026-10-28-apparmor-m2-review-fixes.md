@@ -36,45 +36,48 @@ The fixed review input is `0c527109..02c8e860` and the accepted findings are in 
 **Files:** M1-reviewed tree plus the four original M2 commits.
 **Interfaces:** Consumes M1 `7d0055d4be91724072c416d6a6a39de85c25fc50`; produces a branch with reviewed M1 ancestry and existing M2 behavior.
 
-- [ ] Run extracted production-function checks against old M2 and record the release registry and inode ownership failures.
-- [ ] Switch this clean linked worktree to `codex/apparmor-m2-reviewed` based on reviewed M1.
-- [ ] Replay M2 commits, resolving conflicts by preserving both reviewed M1 fixes and the M2 contract.
-- [ ] Reword the `LISTEND` identifier in its replayed commit subject.
-- [ ] Run the same production-function checks; expect AppArmor in release and root-owned securityfs metadata.
+- [x] Run extracted production-function checks against old M2 and record the release registry and inode ownership failures.
+- [x] Switch this clean linked worktree to `codex/apparmor-m2-reviewed` based on reviewed M1.
+- [x] Replay M2 commits, resolving conflicts by preserving both reviewed M1 fixes and the M2 contract.
+- [x] Reword the `LISTEND` identifier in its replayed commit subject.
+- [x] Run the same production-function checks; expect AppArmor in release and root-owned securityfs metadata.
 
 ### Task 2: Resolve all retained M2 findings
 
 **Files:** `kernel/comps/apparmor/src/policy/{dfa,mod}.rs`, `kernel/core/src/security/lsm/{cred,mod}.rs`, procfs `attr.rs`, path `resolver.rs`, `test/host/lsm_cred_alloc.rs`, M2 Markdown, and process/thread Linux compatibility documents.
 **Interfaces:** Uses Task 1's integrated tree; preserves public APIs and observable M2 behavior.
 
-- [ ] Replace repeated pathname limits with one named constant and add pinned DFA source references.
-- [ ] Fix module documentation, imports, closure names, callback parameter names, method ordering, and derive ordering.
-- [ ] Remove global dead-code suppression from the host probe and exercise the intentionally unused query/path methods.
-- [ ] Apply semantic line breaks and document exec/execveat and proc attribute limitations in the official compatibility artifacts.
-- [ ] Confirm the inherited NixOS matrix selects `security-apparmor` using its actual selection script.
-- [ ] Compile and run the allocation probe with warnings denied; expect all assertions to pass and zero empty-state allocations.
-- [ ] Run formatting, SCML and affected static checks; commit coherent changes with the required identity.
+- [x] Replace repeated pathname limits with one named constant and add pinned DFA source references.
+- [x] Fix module documentation, imports, closure names, callback parameter names, method ordering, and derive ordering.
+- [x] Remove global dead-code suppression from the host probe and exercise the intentionally unused query/path methods.
+- [x] Apply semantic line breaks and document exec/execveat and proc attribute limitations in the official compatibility artifacts.
+- [x] Confirm the inherited NixOS matrix selects `security-apparmor` using its actual selection script.
+- [x] Compile and run the allocation probe with warnings denied; expect all assertions to pass and zero empty-state allocations.
+- [x] Run formatting, SCML and affected static checks; commit coherent changes with the required identity.
 
 ### Task 3: Validate the integrated branch
 
 **Files:** Existing permanent regression/ktest suites, isolated remote validation driver, and `docs/superpowers/reports/2026-10-28-apparmor-m2-review-fixes.md`.
 **Interfaces:** Validates Task 2's frozen source manifest; produces command/exit-code evidence.
 
-- [ ] Sync only this task's source to its remote build workspace, preserving executable bits and private tools.
-- [ ] Run policy-store OOM and credential allocation host tests, then `make check` serially.
-- [ ] Run `make run_kernel AUTO_TEST=regression SCHEME=apparmor RELEASE=1 SMP=4`; require actual label cases and module selection success.
-- [ ] Run default and legacy/precedence selection regressions in release mode; require expected enabled/disabled behavior.
-- [ ] Run full default `make ktest SMP=1` and relevant AppArmor/core tests in release; record every failure by name.
-- [ ] Build and run NixOS `security-apparmor` with the integrated release kernel; require both parser and PID-query tests to pass.
-- [ ] Record environment differences, exact commands and results; run one independent final review and resolve actionable findings.
+- [x] Sync only this task's source to its remote build workspace, preserving executable bits and private tools.
+- [x] Run policy-store OOM and credential allocation host tests, then `make check` serially.
+- [x] Run `make run_kernel AUTO_TEST=regression SCHEME=apparmor RELEASE=1 SMP=4`; require actual label cases and module selection success.
+- [x] Run default and legacy/precedence selection regressions in release mode; require expected enabled/disabled behavior.
+- [x] Run full default `make ktest SMP=1` and relevant AppArmor/core tests in release; record every failure by name.
+- [x] Build and run NixOS `security-apparmor` with the integrated release kernel; require both parser and PID-query tests to pass.
+- [x] Record environment differences, exact commands and results; run one independent final review and resolve actionable findings.
 
 ### Task 4: Deliver the validated branch and walkthrough
 
 **Files:** Final report and standalone demo instructions/transcript.
 **Interfaces:** Uses Task 3's validated source and release image.
 
-- [ ] Audit new/replayed commit identities and verify a clean worktree.
-- [ ] Keep M2's binding and query diff together when updating its draft PR and reviewed-M1 base.
-- [ ] Start a separate release demo session using the validated image.
-- [ ] Demonstrate a pre-load unconfined process, matching post-load exec, unmatched exec, and unchanged parent label.
-- [ ] Retain live PIDs and provide concrete commands for the user to inspect them.
+- [x] Audit the runtime commits' author and committer identities.
+- [x] Keep M2's binding and query diff together against reviewed M1.
+- [x] Start a separate release demo session using the validated image.
+- [x] Demonstrate a pre-load unconfined process, matching post-load exec, unmatched exec, and unchanged parent label.
+- [x] Retain live PIDs and provide concrete commands for the user to inspect them.
+
+After committing the report, audit the final commit identity and clean worktree, then publish to the existing draft [PR #22](https://github.com/zzj-5341/asterinas/pull/22).
+Publication status is recorded by the PR and the external execution ledger, since the documentation commit precedes the push.
