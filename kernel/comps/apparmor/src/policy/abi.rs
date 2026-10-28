@@ -28,9 +28,18 @@ pub(super) fn decode(blob: &[u8]) -> Result<DecodedPolicy> {
         profiles.push(profile);
     }
 
+    // Charge the serialized input plus derived literal storage and attachment
+    // index slots. The input charge conservatively remains after DFA discard.
+    let derived = profiles
+        .iter()
+        .map(|p| {
+            p.attachment().map_or(0, |a| a.literal.capacity())
+                + size_of::<alloc::sync::Arc<Profile>>()
+        })
+        .sum::<usize>();
     Ok(DecodedPolicy {
         profiles,
-        charge: blob.len(),
+        charge: blob.len().checked_add(derived).ok_or_else(protocol_error)?,
     })
 }
 
@@ -91,21 +100,9 @@ fn decode_attachment(cursor: &mut Cursor<'_>) -> Result<Option<AttachmentMatcher
         Some(b"flags") => Ok(None),
         Some(b"aadfa") => {
             let encoded = cursor.aligned_blob(b"aadfa")?;
-            dfa::validate(encoded)?;
             let xmatch_len = cursor.u32()?;
-            if xmatch_len == 0 {
-                return Err(protocol_error());
-            }
-
-            let mut owned = Vec::new();
-            owned
-                .try_reserve_exact(encoded.len())
-                .map_err(|_| Error::new(Errno::ENOMEM))?;
-            owned.extend_from_slice(encoded);
-            Ok(Some(AttachmentMatcher {
-                encoded_dfa: owned.into_boxed_slice(),
-                xmatch_len,
-            }))
+            let literal = dfa::literal_path(encoded, xmatch_len)?;
+            Ok(Some(AttachmentMatcher { literal }))
         }
         Some(_) => Err(unsupported_error()),
         None => Err(protocol_error()),
@@ -342,7 +339,7 @@ mod tests {
     use aster_core::prelude::{Errno, Result};
     use ostd::prelude::ktest;
 
-    use super::decode;
+    use super::{Profile, decode};
 
     const MAGIC: u32 = 0x1b5e_783d;
 
@@ -405,38 +402,13 @@ mod tests {
         output.push(7);
     }
 
-    fn push_table(output: &mut Vec<u8>, id: u16, width: u16, values: &[u32]) {
-        output.extend_from_slice(&id.to_be_bytes());
-        output.extend_from_slice(&width.to_be_bytes());
-        output.extend_from_slice(&0u32.to_be_bytes());
-        output.extend_from_slice(&(values.len() as u32).to_be_bytes());
-        for value in values {
-            match width {
-                2 => output.extend_from_slice(&(*value as u16).to_be_bytes()),
-                4 => output.extend_from_slice(&value.to_be_bytes()),
-                _ => unreachable!(),
-            }
-        }
-        while output.len() & 7 != 0 {
-            output.push(0);
-        }
-    }
-
     fn minimal_dfa() -> Vec<u8> {
-        let mut output = Vec::new();
-        output.extend_from_slice(&MAGIC.to_be_bytes());
-        output.extend_from_slice(&16u32.to_be_bytes());
-        output.extend_from_slice(&0u32.to_be_bytes());
-        output.extend_from_slice(&[0; 4]);
-        push_table(&mut output, 1, 4, &[0, 0]);
-        push_table(&mut output, 2, 4, &[0, 0]);
-        push_table(&mut output, 3, 2, &vec![0; 256]);
-        push_table(&mut output, 4, 2, &[0, 0]);
-        push_table(&mut output, 7, 4, &[0, 0]);
-        push_table(&mut output, 8, 2, &vec![0; 256]);
-        let size = output.len() as u32;
-        output[8..12].copy_from_slice(&size.to_be_bytes());
-        output
+        let blob = include_bytes!(
+            "../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/demo.bin"
+        );
+        let start = find(blob, &MAGIC.to_be_bytes());
+        let len = u32::from_be_bytes(blob[start + 8..start + 12].try_into().unwrap()) as usize;
+        blob[start..start + len].to_vec()
     }
 
     fn policy_unit(name: &[u8], options: &UnitOptions<'_>) -> Vec<u8> {
@@ -504,7 +476,10 @@ mod tests {
     fn decodes_minimal_modes_attachment_and_multiple_units() {
         let enforce = policy_unit(b"demo", &UnitOptions::default());
         let decoded = decode(&enforce).unwrap();
-        assert_eq!(decoded.charge, enforce.len());
+        assert_eq!(
+            decoded.charge,
+            enforce.len() + size_of::<alloc::sync::Arc<Profile>>()
+        );
         assert_eq!(decoded.profiles.len(), 1);
         assert_eq!(decoded.profiles[0].name(), "demo");
         assert_eq!(decoded.profiles[0].mode().as_str(), "enforce");
@@ -519,13 +494,17 @@ mod tests {
 
         let dfa = minimal_dfa();
         let attachment_options = UnitOptions {
-            attachment: Some((&dfa, 9)),
+            attachment: Some((&dfa, 13)),
             ..Default::default()
         };
-        let attached = decode(&policy_unit(b"attached", &attachment_options)).unwrap();
+        let attached_blob = policy_unit(b"attached", &attachment_options);
+        let attached = decode(&attached_blob).unwrap();
         let matcher = attached.profiles[0].attachment().unwrap();
-        assert_eq!(matcher.xmatch_len(), 9);
-        assert_eq!(matcher.encoded_dfa(), dfa.as_slice());
+        assert_eq!(matcher.literal_path(), "/usr/bin/demo");
+        assert_eq!(
+            attached.charge,
+            attached_blob.len() + "/usr/bin/demo".len() + size_of::<alloc::sync::Arc<Profile>>()
+        );
 
         let mut stream = enforce;
         stream.extend_from_slice(&policy_unit(b"observe", &complain_options));
@@ -688,7 +667,7 @@ mod tests {
     fn decodes_second_attachment_with_unit_relative_alignment() {
         let dfa = minimal_dfa();
         let options = UnitOptions {
-            attachment: Some((&dfa, 4)),
+            attachment: Some((&dfa, 13)),
             ..Default::default()
         };
         let first = policy_unit(b"first", &options);
@@ -699,8 +678,8 @@ mod tests {
         let decoded = decode(&stream).unwrap();
         assert_eq!(decoded.profiles.len(), 2);
         assert_eq!(
-            decoded.profiles[1].attachment().unwrap().encoded_dfa(),
-            dfa.as_slice()
+            decoded.profiles[1].attachment().unwrap().literal_path(),
+            "/usr/bin/demo"
         );
     }
 
@@ -708,7 +687,7 @@ mod tests {
     fn rejects_bad_attachment_padding_length_and_dfa() {
         let dfa = minimal_dfa();
         let options = UnitOptions {
-            attachment: Some((&dfa, 4)),
+            attachment: Some((&dfa, 13)),
             ..Default::default()
         };
         let valid = policy_unit(b"attached", &options);
@@ -737,7 +716,7 @@ mod tests {
         );
 
         let unsupported_perms = UnitOptions {
-            attachment: Some((&minimal_dfa(), 4)),
+            attachment: Some((&minimal_dfa(), 13)),
             before_flags: Some("perms"),
             ..Default::default()
         };

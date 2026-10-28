@@ -32,6 +32,11 @@ jobs:
       - name: Check AppArmor allocation failure handling
         if: matrix.id == 'usermode_test'
         run: python3 tools/tests/apparmor_policy_store_oom.py
+      - name: Check credential security allocations
+        if: matrix.id == 'usermode_test'
+        run: |
+          rustc --edition=2024 -D warnings test/host/lsm_cred_alloc.rs -o /tmp/lsm-cred-alloc
+          /tmp/lsm-cred-alloc
       - name: Run basic tests
         uses: ./.github/actions/test
         with:
@@ -97,7 +102,7 @@ jobs:
         include:
           - { variant: 'handover64-debug', release: false, boot_protocol: 'linux-efi-handover64' }
           - { variant: 'multiboot2-smp4',  boot_protocol: 'multiboot2', smp: 4 }
-          - { variant: 'apparmor-lsm', scheme: 'apparmor' }
+          - { variant: 'apparmor-smp4', scheme: 'apparmor', boot_protocol: 'multiboot2', smp: 4 }
           - { variant: 'apparmor-security', scheme: 'apparmor-legacy' }
           - { variant: 'apparmor-precedence', scheme: 'apparmor-precedence' }
     steps:

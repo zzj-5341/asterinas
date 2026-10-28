@@ -6,14 +6,21 @@
 //! [match.h](https://github.com/torvalds/linux/blob/v6.12/security/apparmor/include/match.h),
 //! with unpacking and validation in
 //! [match.c](https://github.com/torvalds/linux/blob/v6.12/security/apparmor/match.c).
-//! M1 restricts this format to unflagged tables, no equivalence-class table,
-//! and 16-bit transition/state tables; it stores validated bytes without matching.
+//! This subset accepts unflagged tables without an equivalence-class table,
+//! with 16-bit transition/state tables.
+//! It derives one literal attachment path and discards the serialized DFA.
+
+use alloc::{string::String, vec::Vec};
 
 use aster_core::prelude::*;
 
 const MAGIC: u32 = 0x1b5e_783d;
 const HEADER_SIZE_MIN: usize = 14;
 const TABLE_HEADER_SIZE: usize = 12;
+
+/// Maximum attachment length excluding the terminating NUL.
+/// Matches `aster_core::fs::utils::PATH_MAX - 1` without exposing core internals.
+const MAX_ATTACHMENT_PATH_BYTES: usize = 4095;
 
 const ACCEPT: usize = 0;
 const BASE: usize = 1;
@@ -65,6 +72,93 @@ pub(super) fn validate(encoded: &[u8]) -> Result<()> {
     let tables = parse_table_set(encoded)?;
     let (state_count, transition_count) = verify_table_shapes(&tables)?;
     verify_state_bounds(&tables, state_count, transition_count)
+}
+
+/// Proves the supported DFA language is exactly one absolute UTF-8 pathname.
+///
+/// In the uncompressed v5 encoding, a failed CHECK selects DEFAULT directly;
+/// it does not follow a fallback chain.
+/// State zero must be a rejecting sink.
+/// Every visited state must have exactly one non-sink edge, except the sole
+/// accepting terminal.
+/// This deliberately rejects general regex languages and noncanonical dead-state encodings.
+/// The path walk is bounded by the pathname byte limit plus one terminal state.
+pub(super) fn literal_path(encoded: &[u8], xmatch_len: u32) -> Result<String> {
+    validate(encoded)?;
+    let tables = parse_table_set(encoded)?;
+    let accept = required_table(&tables, ACCEPT)?;
+    let accept2 = required_table(&tables, ACCEPT2)?;
+    let base = required_table(&tables, BASE)?;
+    let default = required_table(&tables, DEFAULT)?;
+    let check = required_table(&tables, CHECK)?;
+    let next = required_table(&tables, NEXT)?;
+    if xmatch_len == 0 {
+        return Err(protocol_error());
+    }
+    if xmatch_len as usize > MAX_ATTACHMENT_PATH_BYTES {
+        return Err(unsupported_error());
+    }
+    for state in 0..accept.len {
+        // Legacy xmatch uses dfa_user_allow: bit 0 is MAY_EXEC.
+        // Audit, other permissions, and ACCEPT2 extensions are outside this exact-path ABI.
+        // Reference: <https://github.com/torvalds/linux/blob/db2ddb87143519e20a95aa36c60b36107b736a58/security/apparmor/policy_compat.c>.
+        if !matches!(accept.get(state)?, 0 | 1) || accept2.get(state)? != 0 {
+            return Err(unsupported_error());
+        }
+    }
+    // Uncompressed states use DEFAULT directly after a failed CHECK.
+    // Reference: <https://github.com/torvalds/linux/blob/db2ddb87143519e20a95aa36c60b36107b736a58/security/apparmor/match.c>.
+    let transition_fn = |state: usize, byte: u8| -> Result<usize> {
+        let index = base.get(state)? as usize + usize::from(byte);
+        Ok(if check.get(index)? as usize == state {
+            next.get(index)?
+        } else {
+            default.get(state)?
+        } as usize)
+    };
+    if accept.get(0)? != 0 {
+        return Err(protocol_error());
+    }
+    for byte in 0..=255 {
+        if transition_fn(0, byte)? != 0 {
+            return Err(protocol_error());
+        }
+    }
+    let mut path = Vec::new();
+    path.try_reserve_exact(xmatch_len as usize)
+        .map_err(|_| Error::new(Errno::ENOMEM))?;
+    let mut state = 1;
+    for _ in 0..accept.len.min(MAX_ATTACHMENT_PATH_BYTES + 1) {
+        let mut edge = None;
+        for byte in 0..=255 {
+            let target = transition_fn(state, byte)?;
+            if target != 0 {
+                if byte == 0 || edge.is_some() {
+                    return Err(unsupported_error());
+                }
+                edge = Some((byte, target));
+            }
+        }
+        if accept.get(state)? == 1 {
+            if edge.is_some() || path.first() != Some(&b'/') {
+                return Err(unsupported_error());
+            }
+            if path.len() != xmatch_len as usize {
+                return Err(protocol_error());
+            }
+            return String::from_utf8(path).map_err(|_| Error::new(Errno::EILSEQ));
+        }
+        let (byte, target) = edge.ok_or_else(unsupported_error)?;
+        // A repeated state cannot terminate this deterministic single-edge walk.
+        // Bound the walk independently of the untrusted declared match length.
+        if path.len() == MAX_ATTACHMENT_PATH_BYTES {
+            return Err(unsupported_error());
+        }
+        path.try_reserve(1).map_err(|_| Error::new(Errno::ENOMEM))?;
+        path.push(byte);
+        state = target;
+    }
+    Err(unsupported_error())
 }
 
 fn parse_table_set(encoded: &[u8]) -> Result<[Option<TableView<'_>>; 8]> {
@@ -381,6 +475,66 @@ mod tests {
 
     fn assert_errno(result: Result<()>, expected: Errno) {
         assert_eq!(result.err().unwrap().error(), expected);
+    }
+
+    fn demo_dfa() -> Vec<u8> {
+        let blob = include_bytes!(
+            "../../../../../test/initramfs/src/regression/security/lsm/apparmor-fixtures/demo.bin"
+        );
+        let start = blob
+            .windows(4)
+            .position(|bytes| bytes == MAGIC.to_be_bytes())
+            .unwrap();
+        let len = read_u32(blob, start + 8) as usize;
+        blob[start..start + len].to_vec()
+    }
+
+    #[ktest]
+    fn recovers_only_the_literal_attachment_language() {
+        let bytes = demo_dfa();
+        assert_eq!(super::literal_path(&bytes, 13).unwrap(), "/usr/bin/demo");
+        assert_eq!(
+            super::literal_path(&bytes, 12).unwrap_err().error(),
+            Errno::EPROTO
+        );
+
+        // An accepting start would also admit the empty string.
+        let mut early_accept = bytes.clone();
+        set_table_value(&mut early_accept, ACCEPT, 1, 1);
+        assert_eq!(
+            super::literal_path(&early_accept, 13).unwrap_err().error(),
+            Errno::EOPNOTSUPP
+        );
+
+        // A nonzero legacy permission is not necessarily MAY_EXEC.
+        let mut bad_accept = bytes.clone();
+        set_table_value(&mut bad_accept, ACCEPT, 14, 2);
+        assert_eq!(
+            super::literal_path(&bad_accept, 13).unwrap_err().error(),
+            Errno::EOPNOTSUPP
+        );
+
+        let mut looped = bytes.clone();
+        set_table_value(&mut looped, NEXT, b'/' as usize, 1);
+        assert_eq!(
+            super::literal_path(&looped, 13).unwrap_err().error(),
+            Errno::EOPNOTSUPP
+        );
+
+        let mut forked = bytes.clone();
+        set_table_value(&mut forked, CHECK, b'!' as usize, 1);
+        set_table_value(&mut forked, NEXT, b'!' as usize, 2);
+        assert_eq!(
+            super::literal_path(&forked, 13).unwrap_err().error(),
+            Errno::EOPNOTSUPP
+        );
+
+        let mut bad_sink = bytes;
+        set_table_value(&mut bad_sink, DEFAULT, 0, 1);
+        assert_eq!(
+            super::literal_path(&bad_sink, 13).unwrap_err().error(),
+            Errno::EPROTO
+        );
     }
 
     #[ktest]
